@@ -1,0 +1,17 @@
+# ESP-IDF 构建产物
+build/
+
+# 组件管理器按 idf_component.yml + dependencies.lock 自动拉下来的第三方组件，
+# 体积大且可以完整重建，不入库
+managed_components/
+
+# 上一次大改之前的配置备份，已经没用了
+sdkconfig.pre-rewrite.bak
+
+# 编辑器
+.vscode/
+
+# 注意：sdkconfig **是入库的**。这不符合 ESP-IDF 例程的惯例（它们通常忽略它），
+# 但本工程在 sdkconfig 里有一批手工调过的选项（LV_COLOR_16_SWAP、
+# LWIP_SNTP_MAX_SERVERS、PSRAM 相关等），全部搬到 sdkconfig.defaults 里更容易出错。
+# 入库保证换台机器 clone 下来就能构建出一样的东西。

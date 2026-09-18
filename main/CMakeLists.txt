@@ -1,0 +1,33 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "app/app_storage.c"
+        "app/app_camera.c"
+        "app/app_settings.c"
+        "app/app_wifi.c"
+        "app/app_mail.c"
+        "ui/ui.c"
+        "ui/splash_logo.c"
+        "ui/ui_theme.c"
+        "ui/ui_input.c"
+        "ui/ui_scan.c"
+        "ui/page_home.c"
+        "ui/page_camera.c"
+        "ui/page_photos.c"
+        "ui/page_settings.c"
+    INCLUDE_DIRS
+        "."
+        "app"
+        "ui"
+    REQUIRES
+        lckfb_bsp
+        driver
+        esp_timer
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp-tls
+        mbedtls
+        espressif__esp_jpeg
+)

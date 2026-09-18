@@ -1,0 +1,17 @@
+## IDF Component Manager Manifest File
+##
+## 版本组合参考立创官方示例 14-handheld（已在该板验证），但去掉了语音识别
+## esp-sr / esp-dsp / es7210 整条链路。
+dependencies:
+  espressif/esp32-camera: "^2.0.10"          # GC0308 驱动 + JPEG 软编码(frame2jpg)
+  lvgl/lvgl: "~8.3.0"
+  espressif/esp_lvgl_port: "~1.4.0"          # LVGL 与 esp_lcd 的桥接
+  espressif/esp_lcd_touch_ft5x06: "~1.0.6"   # 触摸屏驱动
+  espressif/esp_codec_dev: "~1.3.0"          # ES8311 编解码器驱动
+  ## 相册页要解 TF 卡里的 JPEG。之前只是 esp32-camera 的间接依赖，这里提为
+  ## 直接依赖才能在我们的代码里直接 include jpeg_decoder.h。
+  espressif/esp_jpeg: "^1.3.1"
+
+  ## Required IDF version（与立创示例 14-handheld 对齐，用 5.1.x）
+  idf:
+    version: ">=5.1.0"
