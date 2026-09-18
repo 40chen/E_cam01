@@ -11,6 +11,12 @@ sdkconfig.pre-rewrite.bak
 # 编辑器
 .vscode/
 
+# Python 字节码缓存。跟 Python 版本绑死（cpython-313 这种后缀），
+# 换台机器或换个 Python 就是一堆无效文件，而且源脚本一改名就成了孤儿——
+# 仓库里曾经就躺着一个已经不存在的脚本留下的 .pyc
+__pycache__/
+*.pyc
+
 # 注意：sdkconfig **是入库的**。这不符合 ESP-IDF 例程的惯例（它们通常忽略它），
 # 但本工程在 sdkconfig 里有一批手工调过的选项（LV_COLOR_16_SWAP、
 # LWIP_SNTP_MAX_SERVERS、PSRAM 相关等），全部搬到 sdkconfig.defaults 里更容易出错。

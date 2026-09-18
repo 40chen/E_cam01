@@ -14,14 +14,15 @@
 
 | 文件 | 是什么 |
 | --- | --- |
-| `main_ui/shutter_sound.c` / `.h` | 生成好的裸 PCM（16kHz / 16bit / 立体声，250ms，15988 字节），编在 flash 里 |
+| `main_ui/shutter_sound.c` / `.h` | 曾经编进固件的裸 PCM（16kHz / 16bit / 立体声，250ms，15988 字节） |
 | `tools/gen_shutter_sound.py` | 从素材生成上面那个文件的脚本（WAV → 裸 PCM） |
 | `tools/preview_shutter_body.py` | 生成几档不同"低中频强度"的试听文件，调音色用 |
 | `tools/check_shutter_sound.py` | 把源素材和固件里的 PCM 分别导成 WAV，用来在电脑上对比试听 |
+| `assets/quick-camera-click.mp3` | **原始素材**（用户最早给的那份） |
+| `assets/quick-camera-click.pcm` | 16000 Hz / 16bit / 单声道 / 2525 帧 的裸 PCM，用户自己重采样的版本 |
 | `assets/shutter-body-*.wav` | `preview_shutter_body.py` 生成的试听文件 |
 
-原始素材 `assets/quick-camera-click.wav` **没有删，留在原地**——那是用户自己的文件，
-和这次移除无关。
+这些素材**全部集中在本目录**，`assets/` 里现在只剩启动页那张 `logo.jpg`。
 
 ### 为什么移除
 
@@ -47,7 +48,9 @@
 （能量全在喇叭谐振点上），而快门声走同一套代码、同一条通路却几乎听不见。
 
 补了低中频的"身体"（`shutter-body-0.30`，1kHz 以下提到 60%）之后在板子上
-**仍然偏小**，所以最后决定不做这个功能。
+**仍然偏小**。最后又试过一次**把用户重采样的 PCM 原样搬进固件、不做任何处理**
+（峰值 -3.6 dBFS、RMS -23.9 dBFS，比测试音低 16dB），仍然是同样的结果，
+于是决定整个功能不做。
 
 ### 如果以后要重做，这几条别再试一遍
 
