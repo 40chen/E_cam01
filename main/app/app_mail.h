@@ -52,15 +52,38 @@ app_mail_result_t app_mail_send_test(void);
 app_mail_result_t app_mail_send_photo(const char *path);
 
 /*
- * 一封邮件带多个附件（multipart/mixed，每张一个 image/jpeg 段）。
- * 同样**阻塞**，要在自己的任务里调。逐个附件流式编码，不会把文件读进内存。
- * paths 只在调用期间用，返回后调用方可以释放。
- * 超过 APP_MAIL_MAX_ATTACHMENTS 会被截断（只记警告，不报错）。
+ * 一封邮件带多个附件（multipart/mixed），相册页发照片用。
+ * 等价于 app_mail_send_files(paths, count, "image/jpeg", "photo")。
  */
 app_mail_result_t app_mail_send_photos(const char *const *paths, int count);
 
-/* 单封邮件的附件上限：单个文件，以及所有附件加起来 */
-#define APP_MAIL_MAX_ATTACH         (8 * 1024 * 1024)
+/*
+ * 同上，但附件类型和邮件文案由调用方给：mime 是每个附件段的 Content-Type
+ * （"image/jpeg" / "audio/mpeg"），kind 用来拼主题和正文（"photo" / "music"）。
+ * 音乐页发 MP3 用这个——把 .mp3 标成 image/jpeg 虽然多数邮件客户端会自己
+ * 嗅探内容，但那是碰运气，不该指望。
+ *
+ * 同样**阻塞**，要在自己的任务里调；逐个附件流式编码，不会把文件读进内存。
+ * paths 只在调用期间用，返回后调用方可以释放。
+ * 超过 APP_MAIL_MAX_ATTACHMENTS 会被截断（只记警告，不报错），
+ * 总大小超过 APP_MAIL_MAX_ATTACH 直接返回 APP_MAIL_ERR_TOO_BIG。
+ */
+app_mail_result_t app_mail_send_files(const char *const *paths, int count,
+                                      const char *mime, const char *kind);
+
+/*
+ * 单封邮件的附件总量上限。**18MB 是算出来的，不是拍的**：
+ *
+ *   - 收件方（Gmail 等）普遍限制**整封邮件** 25MB，而附件 base64 之后要膨胀
+ *     4/3：18MB 的附件编码完约 24MB，加上头正好压在 25MB 以内。再往上加会
+ *     被对方服务器拒收，而且是**整封传完之后**才拒，白等几分钟。
+ *   - 这么大在 TLS 下大约要传 1~2 分钟（WiFi 上实测 100~300KB/s）。这期间
+ *     界面显示 Sending...，属正常，不是卡死；SMTP_TIMEOUT_MS 是单次读写的
+ *     超时，不会把整封传一半掐掉。
+ *   - 不吃 RAM：附件是分块读、分块 base64 的，不会把文件读进内存。所以调大
+ *     这个值只吃时间，不冒险。
+ */
+#define APP_MAIL_MAX_ATTACH         (18 * 1024 * 1024)
 #define APP_MAIL_MAX_ATTACHMENTS    20
 
 /* 短文案，直接进 UI 提示条 */

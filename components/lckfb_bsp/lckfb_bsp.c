@@ -409,6 +409,55 @@ esp_err_t bsp_lvgl_start(void)
 static sdmmc_card_t *s_card = NULL;
 static bool s_sd_mounted = false;
 
+/*
+ * host + slot 的配置**只有这一份**，两条路共用：挂 FATFS（bsp_sdcard_mount）
+ * 和只建卡不挂文件系统（bsp_sdcard_card_init，U 盘模式用）。
+ * 各写一份迟早会改漏一处，而这里改漏的代价很大——见下面引脚的注释。
+ */
+static void sdcard_config(sdmmc_host_t *host, sdmmc_slot_config_t *slot)
+{
+    /*
+     * 这两个宏都展开成 `{ ... }` 花括号初始化列表，**只能在声明时用**，
+     * 不能写成 `*host = SDMMC_HOST_DEFAULT();`（那不是合法的 C）。
+     * 所以先各自声明一个，再拷出去。
+     */
+    const sdmmc_host_t h = SDMMC_HOST_DEFAULT();       /* slot 1 */
+    const sdmmc_slot_config_t s = SDMMC_SLOT_CONFIG_DEFAULT();
+    *host = h;
+    *slot = s;
+
+    /*
+     * 必须显式指定引脚。ESP32-S3 的 SDMMC_SLOT_CONFIG_DEFAULT() 会填入
+     * clk=GPIO14、cmd=GPIO15、d0=GPIO2，而本板上：
+     *   GPIO2  = 整板 I2C 的 SCL（PCA9557 / QMI8658 / 触摸 / ES8311 / 摄像头 SCCB）
+     *   GPIO15 = 摄像头 DVP_D4
+     *   GPIO14 = I2S_BCLK
+     * 挂载失败后这些引脚会一直停在 SDMMC 功能上不恢复，I2C 与摄像头会双双失效。
+     */
+    slot->clk = BSP_SD_CLK_IO;
+    slot->cmd = BSP_SD_CMD_IO;
+    slot->d0 = BSP_SD_DAT0_IO;
+    slot->d1 = GPIO_NUM_NC;
+    slot->d2 = GPIO_NUM_NC;
+    slot->d3 = GPIO_NUM_NC;
+    slot->d4 = GPIO_NUM_NC;
+    slot->d5 = GPIO_NUM_NC;
+    slot->d6 = GPIO_NUM_NC;
+    slot->d7 = GPIO_NUM_NC;
+    slot->width = 1;                                   /* 1-line SD 模式 */
+    slot->flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+}
+
+/* IDF 内部就是这么收尾的：带参数的新版 deinit 和旧版二选一 */
+static void sdcard_host_deinit(const sdmmc_host_t *host)
+{
+    if (host->flags & SDMMC_HOST_FLAG_DEINIT_ARG) {
+        host->deinit_p(host->slot);
+    } else {
+        (*host->deinit)();
+    }
+}
+
 esp_err_t bsp_sdcard_mount(void)
 {
     if (s_sd_mounted) {
@@ -421,29 +470,9 @@ esp_err_t bsp_sdcard_mount(void)
         .allocation_unit_size = 8 * 1024,
     };
 
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();          /* slot 1 */
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-
-    /*
-     * 必须显式指定引脚。ESP32-S3 的 SDMMC_SLOT_CONFIG_DEFAULT() 会填入
-     * clk=GPIO14、cmd=GPIO15、d0=GPIO2，而本板上：
-     *   GPIO2  = 整板 I2C 的 SCL（PCA9557 / QMI8658 / 触摸 / ES8311 / 摄像头 SCCB）
-     *   GPIO15 = 摄像头 DVP_D4
-     *   GPIO14 = I2S_BCLK
-     * 挂载失败后这些引脚会一直停在 SDMMC 功能上不恢复，I2C 与摄像头会双双失效。
-     */
-    slot.clk = BSP_SD_CLK_IO;
-    slot.cmd = BSP_SD_CMD_IO;
-    slot.d0 = BSP_SD_DAT0_IO;
-    slot.d1 = GPIO_NUM_NC;
-    slot.d2 = GPIO_NUM_NC;
-    slot.d3 = GPIO_NUM_NC;
-    slot.d4 = GPIO_NUM_NC;
-    slot.d5 = GPIO_NUM_NC;
-    slot.d6 = GPIO_NUM_NC;
-    slot.d7 = GPIO_NUM_NC;
-    slot.width = 1;                                    /* 1-line SD 模式 */
-    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    sdmmc_host_t host;
+    sdmmc_slot_config_t slot;
+    sdcard_config(&host, &slot);
 
     esp_err_t err = esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host, &slot,
                                             &mount_config, &s_card);
@@ -457,9 +486,73 @@ esp_err_t bsp_sdcard_mount(void)
     return ESP_OK;
 }
 
+/*
+ * 只把卡初始化到"能读扇区"，**不挂 FATFS**。
+ *
+ * 为什么需要这条独立的路：U 盘模式要把**裸块设备**交给 TinyUSB，而
+ * esp_vfs_fat_sdcard_unmount() 内部会 `call_host_deinit(&card->host); free(card);`
+ * ——卸载之后主机被 deinit、卡结构体被 free，根本没有东西可以交给 TinyUSB。
+ * 所以进 U 盘模式时的顺序是：卸 FATFS → 用这个函数重新建卡 → 交给 TinyUSB。
+ *
+ * 注意**不要**像官方例程那样 `while (sdmmc_card_init(...))` 无限重试：
+ * 这里是从界面点进来的，没插卡就要立刻报错回去，不能把界面卡住。
+ */
+esp_err_t bsp_sdcard_card_init(void)
+{
+    if (s_card != NULL) {
+        return ESP_OK;
+    }
+
+    sdmmc_host_t host;
+    sdmmc_slot_config_t slot;
+    sdcard_config(&host, &slot);
+
+    sdmmc_card_t *card = malloc(sizeof(sdmmc_card_t));
+    ESP_RETURN_ON_FALSE(card != NULL, ESP_ERR_NO_MEM, TAG, "no mem for sdmmc_card_t");
+
+    bool host_up = false;
+    esp_err_t err = (*host.init)();
+    if (err == ESP_OK) {
+        host_up = true;
+        err = sdmmc_host_init_slot(host.slot, &slot);
+    }
+    if (err == ESP_OK) {
+        err = sdmmc_card_init(&host, card);
+    }
+    if (err != ESP_OK) {
+        /* 失败要收干净：主机没 deinit 的话，下次进模式 (*host.init)() 会报
+         * "already initialized"，引脚也会一直停在 SDMMC 功能上 */
+        if (host_up) {
+            sdcard_host_deinit(&host);
+        }
+        free(card);
+        ESP_LOGW(TAG, "TF card init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    s_card = card;
+    ESP_LOGI(TAG, "TF card initialized (raw, no filesystem)");
+    return ESP_OK;
+}
+
+/* 释放 bsp_sdcard_card_init() 建的卡。**只在没挂 FATFS 时用**——
+ * 走着 FATFS 的那条路要调 bsp_sdcard_unmount()，它自己会收尾。 */
+void bsp_sdcard_card_deinit(void)
+{
+    if (s_card == NULL) {
+        return;
+    }
+    sdcard_host_deinit(&s_card->host);
+    free(s_card);
+    s_card = NULL;
+}
+
 esp_err_t bsp_sdcard_unmount(void)
 {
     if (!s_sd_mounted) {
+        /* 卡是用 bsp_sdcard_card_init() 建的（U 盘模式那条路）——这里也顺手
+         * 收掉，免得调用方以为"卸载过了"就把卡泄漏在那儿 */
+        bsp_sdcard_card_deinit();
         return ESP_OK;
     }
     esp_err_t err = esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, s_card);
@@ -687,42 +780,155 @@ esp_err_t bsp_audio_init(void)
     return ESP_OK;
 }
 
+/*
+ * 支持运行期切换的采样率。全部取自 esp_codec_dev/device/es8311/es8311.c 的
+ * coeff_div[] 里 mclk == rate * 256 的那些行，覆盖 MP3 的全部档位
+ * （MPEG1: 32/44.1/48k，MPEG2: 16/22.05/24k，MPEG2.5: 8/11.025/12k）。
+ * 表里没有的采样率会在 es8311_config_sample() 里返回 NOT_SUPPORTED，
+ * 那会让 esp_codec_dev_open() 半途失败，所以在这里先拦掉。
+ */
+static const uint32_t s_supported_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
+};
+
+/* ES8311 的 7 位 I2C 地址。esp_codec_dev 的 ES8311_CODEC_DEFAULT_ADDR 是 0x30
+ * （8 位写法），它内部会 >>1 再交给驱动；而 bsp_i2c_read/write 收的就是 7 位，
+ * 所以这里必须移位，不能直接把那个宏传进来。 */
+#define ES8311_ADDR_7BIT  (ES8311_CODEC_DEFAULT_ADDR >> 1)
+
+/* 寄存器号抄自 esp_codec_dev/device/es8311/es8311_reg.h —— 那个头文件不在该组件
+ * 对外暴露的 include 路径里（只有 include / interface / device/include），
+ * 所以在这里写死，改动时对照它。 */
+#define ES8311_REG_CLK_MGR02  (0x02)
+#define ES8311_REG_CLK_MGR03  (0x03)
+#define ES8311_REG_CLK_MGR04  (0x04)
+#define ES8311_REG_CLK_MGR05  (0x05)
+#define ES8311_REG_CLK_MGR06  (0x06)
+#define ES8311_REG_CLK_MGR07  (0x07)
+#define ES8311_REG_CLK_MGR08  (0x08)
+
+typedef struct {
+    uint8_t reg;
+    uint8_t preserve;   /* 写回时要保留的位（对应 es8311_config_sample 里的 &= 掩码） */
+    uint8_t expect;     /* 除 preserve 之外那些位的期望值 */
+} es8311_clk_reg_t;
+
+static void es8311_expected_clk_regs(uint32_t rate, es8311_clk_reg_t out[7])
+{
+    /*
+     * MCLK = 256 × fs（I2S_STD_CLK_DEFAULT_CONFIG 的 mclk_multiple 默认就是 256），
+     * 这个前提下 coeff_div[] 里 8k~48k 各行的 pre_div / pre_multi / adc_div /
+     * dac_div / bclk_div / lrck 全都一样，**唯一随采样率变的是 OSR**：
+     * 低采样率要用更高的过采样倍数，所以 ≤16kHz 是 0x20，≥22.05kHz 是 0x10。
+     * 这也是为什么官方例程（开机 48000）在 44.1k/48k 之间切来切去都没事——
+     * 那几档写进去的字节完全相同，它从没跨过"OSR 会变"的这条边界。
+     */
+    const uint8_t dac_osr = (rate <= 16000) ? 0x20 : 0x10;
+    static const es8311_clk_reg_t tpl[7] = {
+        { ES8311_REG_CLK_MGR02, 0x07, 0x00 },   /* 预分频 = 1，倍频 = 1 */
+        { ES8311_REG_CLK_MGR03, 0x80, 0x10 },   /* 单速模式，ADC OSR = 0x10 */
+        { ES8311_REG_CLK_MGR04, 0x80, 0x10 },   /* DAC OSR —— 随采样率变，下面覆盖 */
+        { ES8311_REG_CLK_MGR05, 0x00, 0x00 },   /* ADC / DAC 分频 = 1 */
+        { ES8311_REG_CLK_MGR06, 0xE0, 0x03 },   /* BCLK 分频 = 4（寄存器里写 4-1） */
+        { ES8311_REG_CLK_MGR07, 0xC0, 0x00 },   /* LRCK 分频高字节 */
+        { ES8311_REG_CLK_MGR08, 0x00, 0xFF },   /* LRCK 分频低字节，合计 256 */
+    };
+    memcpy(out, tpl, sizeof(tpl));
+    out[2].expect = dac_osr;
+}
+
+/*
+ * 回读 ES8311 的时钟分频寄存器，和该采样率的期望值比对，不一致就补写。
+ *
+ * 为什么需要这一步：esp_codec_dev 的 close/open 路径有顺序问题——close 走
+ * es8311_suspend()，最后把 RESET_REG00 写成 0x1F（bit7 = CSM 清零，芯片进复位态）；
+ * 接着 open 走 codec->set_fs → es8311_config_sample()，上面这 7 个寄存器就是在这时
+ * 写的，**此刻芯片还在复位态**；直到 open 末尾的 codec->enable(true) → es8311_start()
+ * 才把 CSM 重新拉起来，而 es8311_start() 根本不碰时钟分频器。
+ *
+ * 所以这几个写到底有没有生效，取决于 ES8311 在 CSM=0 时认不认 I2C 写。光读源码
+ * 定不下来（本 BSP 以前那版注释就是凭推理下了"写不进去"的结论，但没有实测过），
+ * 而两种答案对应的处理完全相反。回读校验把这个疑问一次问清楚：
+ *   - 没有警告日志 → 那几个写本来就是生效的，以前那条结论是错的；
+ *   - 有警告日志   → 疑点是真的，这里已经顺手补上，同时日志里留下了证据。
+ * 无论哪种，音频都能正常工作；正常情况下这里只是 7 次单字节 I2C 读（约 1ms）。
+ */
+static void es8311_align_clk_regs(uint32_t rate)
+{
+    es8311_clk_reg_t want[7];
+    es8311_expected_clk_regs(rate, want);
+
+    uint8_t fixed_count = 0;
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        uint8_t got = 0;
+        if (bsp_i2c_read(ES8311_ADDR_7BIT, want[i].reg, &got, 1) != ESP_OK) {
+            ESP_LOGW(TAG, "读 ES8311 REG%02X 失败，跳过本次时钟校验", want[i].reg);
+            return;
+        }
+        if ((uint8_t)(got & ~want[i].preserve) == want[i].expect) {
+            continue;
+        }
+        const uint8_t value = (uint8_t)((got & want[i].preserve) | want[i].expect);
+        if (fixed_count == 0) {
+            ESP_LOGW(TAG, "%" PRIu32 " Hz：ES8311 时钟寄存器与期望不符，说明 open 里那几个写"
+                          "没生效（见 es8311_align_clk_regs 注释），补写：", rate);
+        }
+        ESP_LOGW(TAG, "  REG%02X: 实际 0x%02X -> 期望 0x%02X", want[i].reg, got, value);
+        if (bsp_i2c_write(ES8311_ADDR_7BIT, want[i].reg, value) != ESP_OK) {
+            ESP_LOGE(TAG, "  REG%02X 补写失败", want[i].reg);
+        }
+        fixed_count++;
+    }
+
+    if (fixed_count > 0) {
+        ESP_LOGW(TAG, "%d 个寄存器已修正。这条日志请保留：它是「复位态写寄存器会丢」"
+                      "这个判断的第一个实测证据", fixed_count);
+    } else {
+        ESP_LOGI(TAG, "%" PRIu32 " Hz：ES8311 时钟寄存器校验通过（7 个全部符合预期）", rate);
+    }
+}
+
 esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
 {
     ESP_RETURN_ON_FALSE(s_play_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "audio not initialized");
     if (rate == 0) {
         return ESP_OK;
     }
+    ESP_RETURN_ON_FALSE(bits == 16 && channels == 2, ESP_ERR_NOT_SUPPORTED, TAG,
+                        "只支持 16bit/立体声（请求 %" PRIu32 "bit/%dch）", bits, channels);
     if (rate == s_cur_rate) {
-        return ESP_OK;                      /* 采样率没变——开机之后每次播放走的都是这条路 */
+        return ESP_OK;          /* 采样率没变——同一档位的歌之间切换走的就是这条路 */
     }
-    if (s_cur_rate != 0) {
-        /*
-         * 中途换采样率一律拒绝。这不是"没实现"，是"这么做一定会坏"。
-         *
-         * esp_codec_dev 的 close/open 路径有顺序 bug：
-         *   close → es8311_suspend() 最后写 RESET_REG00 = 0x1F，bit7=0，把芯片
-         *           按在复位态；
-         *   open  → ① codec->set_fs → es8311_config_sample() 写 CLK_MANAGER
-         *              REG02~REG08 —— 此刻芯片还在复位态，这些写**全部丢失**；
-         *           ② codec->enable(true) → es8311_start() 写 RESET_REG00=0x80
-         *              解除复位，但 es8311_start 根本不碰时钟分频器。
-         * 结果：分频器停在旧采样率、I2S 已经跑新采样率 → 声音严重失真。而且
-         * 这副坏状态会一直留着，之后每次播放都是坏的。
-         *
-         * 所以素材要在生成阶段就重采样到 BSP_AUDIO_DEFAULT_RATE，不要在这里切。
-         * 真要支持多采样率，必须绕开 esp_codec_dev 自己管 I2S 时钟、并直接写
-         * ES8311 的时钟寄存器。
-         */
-        ESP_LOGE(TAG, "拒绝从 %" PRIu32 " Hz 切到 %" PRIu32 " Hz：运行期换采样率会让 "
-                      "ES8311 的时钟分频器停在旧值（见 bsp_audio_set_fs 注释），"
-                      "请把素材重采样到 %d Hz",
-                 s_cur_rate, rate, BSP_AUDIO_DEFAULT_RATE);
-        return ESP_ERR_NOT_SUPPORTED;
+    bool supported = false;
+    for (size_t i = 0; i < sizeof(s_supported_rates) / sizeof(s_supported_rates[0]); i++) {
+        if (s_supported_rates[i] == rate) {
+            supported = true;
+            break;
+        }
+    }
+    ESP_RETURN_ON_FALSE(supported, ESP_ERR_NOT_SUPPORTED, TAG,
+                        "不支持 %" PRIu32 " Hz（支持档位见 s_supported_rates）", rate);
+
+    /*
+     * 换采样率要给 I2S 重配时钟，中间有一小段抖动；不静音的话，DMA 里剩下的
+     * 那点残数据会以旧时钟的尾巴放出来，听着是"啪"的一声。
+     * 开机第一次打开（s_cur_rate == 0）没有这个问题，也不用多这一次 I2C 写。
+     */
+    const bool switching = (s_cur_rate != 0);
+    if (switching) {
+        bsp_audio_mute(true);
     }
 
-    /* 走到这里说明 s_cur_rate == 0，是开机第一次打开，codec 还没 open 过，
-     * 这个 close 是空操作，留着只是为了和下面 open 的成对关系清楚 */
+    /*
+     * 走到这里说明 s_cur_rate == 0，是开机第一次打开，codec 还没 open 过，
+     * 这个 close 是空操作（esp_codec_dev_close 见 output_opened 为假会直接返回），
+     * 留着只是为了和下面 open 的成对关系清楚。
+     *
+     * **这段和官方例程 11-mp3_player 的 bsp_codec_set_fs() 是同一套写法**：每个文件
+     * 都 close + open，让 I2S 时钟跟着素材自己的采样率走。差别只在于本工程默认是
+     * 16000（那条例程默认 48000），第一次切换就会跨过 OSR 那条边界，所以多了一步
+     * 回读校验——见 es8311_align_clk_regs 的注释。
+     */
     esp_codec_dev_close(s_play_dev);
 
     /*
@@ -745,10 +951,20 @@ esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
     if (err != ESP_OK) {
         /* 失败也要恢复运行，否则一次失败就把音频彻底钉死了 */
         i2s_channel_enable(s_i2s_tx);
+        if (switching) {
+            bsp_audio_mute(false);
+        }
+        /* 标记成"没打开过"：下次调用会走完整的 close/open 重来一遍，
+         * 而不是以为 codec 还好好地停在旧采样率上 */
+        s_cur_rate = 0;
         ESP_LOGE(TAG, "codec open at %" PRIu32 "Hz/%" PRIu32 "bit/%dch failed: %s",
                  rate, bits, channels, esp_err_to_name(err));
         return err;
     }
+
+    /* open 里那几个时钟寄存器写得太早（芯片还在复位态），回读校验一遍。
+     * 见 es8311_align_clk_regs 的长注释：正常情况下这里什么都不会做 */
+    es8311_align_clk_regs(rate);
 
     /*
      * 重开之后必须把音量补回去，否则就是全程静音。
@@ -759,6 +975,10 @@ esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
      * PCM 写进去了、功放也开了，就是没声音。
      */
     bsp_audio_volume_set(s_volume);
+
+    if (switching) {
+        bsp_audio_mute(false);
+    }
 
     s_cur_rate = rate;
     ESP_LOGI(TAG, "audio fs -> %" PRIu32 " Hz / %" PRIu32 " bit / %d ch", rate, bits, channels);
@@ -807,8 +1027,10 @@ esp_err_t bsp_audio_volume_set(int volume)
     ESP_RETURN_ON_FALSE(s_play_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "audio not initialized");
     if (volume < 0) {
         volume = 0;
-    } else if (volume > 100) {
-        volume = 100;
+    } else if (volume > BSP_AUDIO_VOLUME_MAX) {
+        /* 93 以上是数字增益（0dBFS 在 93，100 是 +3.6dB）。夹住——
+         * 那增益对接近满刻度的素材只会削顶，不是"更响"。见头文件里的推导。 */
+        volume = BSP_AUDIO_VOLUME_MAX;
     }
     s_volume = volume;
     return esp_codec_dev_set_out_vol(s_play_dev, volume);

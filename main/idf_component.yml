@@ -11,6 +11,13 @@ dependencies:
   ## 相册页要解 TF 卡里的 JPEG。之前只是 esp32-camera 的间接依赖，这里提为
   ## 直接依赖才能在我们的代码里直接 include jpeg_decoder.h。
   espressif/esp_jpeg: "^1.3.1"
+  ## MP3 解码内核（Helix 定点解码器），立创官方例程 11-mp3_player 用的也是它。
+  ## 只用解码库，不用 chmorgan/esp-audio-player 那一层：它拿不到播放位置，
+  ## 而进度条和歌词同步都要位置（见 main/app/app_audio.c）。
+  chmorgan/esp-libhelix-mp3: "^1.0.3"
+  ## U 盘模式（USB MSC）。2.x 是适配 IDF 5.x 的版本——IDF 5.1.7 自带的例程
+  ## examples/peripherals/usb/device/tusb_msc 用的就是 ^2.0.0，API 以它为准。
+  espressif/esp_tinyusb: "^2.0.0"
 
   ## Required IDF version（与立创示例 14-handheld 对齐，用 5.1.x）
   idf:

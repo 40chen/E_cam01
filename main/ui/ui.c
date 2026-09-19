@@ -20,38 +20,14 @@ static lv_obj_t *s_current = NULL;
 static void (*s_current_destroy)(void) = NULL;
 static ui_page_id_t s_current_id = UI_PAGE_COUNT;
 
-static lv_obj_t *page_placeholder_create(lv_obj_t *parent);
-static void page_placeholder_destroy(void);
 static void switch_page_locked(ui_page_id_t page);
 
-/*---------------------------------------------------------------------------
- * 占位页：阶段 1 先让导航跑通，后续阶段逐个替换成真实页面
- *-------------------------------------------------------------------------*/
-static lv_obj_t *page_placeholder_create(lv_obj_t *parent)
-{
-    /* 必须返回外壳本身而不是内容区，否则切页时只删掉内容，
-     * 标题栏会永远留在屏幕上 */
-    lv_obj_t *shell = ui_page_shell_create(parent, "Coming soon");
-    lv_obj_t *content = ui_page_shell_content(shell);
-
-    lv_obj_t *lbl = lv_label_create(content);
-    lv_label_set_text(lbl, "Not implemented yet");
-    lv_obj_set_style_text_font(lbl, UI_FONT_BODY, 0);
-    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT_SUB, 0);
-    lv_obj_center(lbl);
-    return shell;
-}
-
-static void page_placeholder_destroy(void)
-{
-}
-
 static const page_desc_t s_pages[UI_PAGE_COUNT] = {
-    [UI_PAGE_HOME]     = { page_home_create,        page_home_destroy },
-    [UI_PAGE_CAMERA]   = { page_camera_create,      page_camera_destroy },
-    [UI_PAGE_PHOTOS]    = { page_photos_create,       page_photos_destroy },
-    [UI_PAGE_MUSIC]    = { page_placeholder_create, page_placeholder_destroy },
-    [UI_PAGE_SETTINGS] = { page_settings_create,     page_settings_destroy },
+    [UI_PAGE_HOME]     = { page_home_create,     page_home_destroy },
+    [UI_PAGE_CAMERA]   = { page_camera_create,   page_camera_destroy },
+    [UI_PAGE_PHOTOS]   = { page_photos_create,   page_photos_destroy },
+    [UI_PAGE_MUSIC]    = { page_music_create,    page_music_destroy },
+    [UI_PAGE_SETTINGS] = { page_settings_create, page_settings_destroy },
 };
 
 /*---------------------------------------------------------------------------

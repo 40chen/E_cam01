@@ -28,6 +28,7 @@
 #include "ui_input.h"
 #include "ui_scan.h"
 #include "ui_theme.h"
+#include "ui_usbmsc.h"
 
 static const char *TAG = "page_settings";
 
@@ -40,6 +41,7 @@ static lv_obj_t *s_row_from = NULL;
 static lv_obj_t *s_row_mailpass = NULL;
 static lv_obj_t *s_row_to = NULL;
 static lv_obj_t *s_row_free = NULL;
+static lv_obj_t *s_row_usb = NULL;
 static lv_obj_t *s_row_testmail = NULL;
 static lv_obj_t *s_row_tone = NULL;
 static lv_timer_t *s_status_timer = NULL;
@@ -537,10 +539,25 @@ static void refresh_status(void)
     }
 }
 
+static void refresh_storage(void);
+
 static void status_timer_cb(lv_timer_t *t)
 {
     (void)t;
     refresh_status();
+    /* 剩余空间也跟着刷：从 U 盘模式退回来之后，卡刚被电脑写过，
+     * 不刷的话这里会一直显示进模式之前的旧值 */
+    if (s_row_free != NULL) {
+        refresh_storage();
+    }
+}
+
+static void row_usb_cb(lv_event_t *e)
+{
+    (void)e;
+    /* 进模式 + 弹模式页都在这里；失败（没插卡、建卡失败）会自己弹提示条。
+     * 模式页是盖在 lv_layer_top() 上的浮层，关掉就回到本页 */
+    ui_usbmsc_open();
 }
 
 static void refresh_storage(void)
@@ -611,6 +628,14 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     /* ---- Storage ---- */
     add_section(content, "STORAGE");
     s_row_free = add_row(content, "Free space", "", false, NULL, NULL);
+    /*
+     * U 盘模式：把 TF 卡交给电脑当读卡器。这是**唯一会改挂载状态**的开关，
+     * 放在 Storage 组里——它影响的就是存储本身。
+     * 进模式期间卡归电脑，本页的 Free space 会显示 No TF card，属正常。
+     * 没插卡时也让点，由 ui_usbmsc_open() 弹一句 "No TF card"，
+     * 比把整行置灰更容易看出原因。
+     */
+    s_row_usb = add_row(content, "USB Drive", "", true, row_usb_cb, NULL);
     refresh_storage();
 
     /* ---- Reset ---- */
@@ -642,6 +667,7 @@ void page_settings_destroy(void)
     s_row_mailpass = NULL;
     s_row_to = NULL;
     s_row_free = NULL;
+    s_row_usb = NULL;
     s_row_testmail = NULL;
     s_row_tone = NULL;
 }

@@ -44,8 +44,8 @@ void ui_go_home_async(void);
 ui_page_id_t ui_current_page(void);
 
 /*---------------------------------------------------------------------------
- * 页面模块实现。ui.c 通过下表调用；主菜单与相机页在阶段 1 实现，
- * 其余页面暂由 ui.c 里的占位页顶着，后续阶段逐个替换。
+ * 页面模块实现。ui.c 通过下表调用，每个页面都是"create 返回外壳、destroy
+ * 负责善后"这一对。
  *-------------------------------------------------------------------------*/
 lv_obj_t *page_home_create(lv_obj_t *parent);
 void      page_home_destroy(void);
@@ -55,6 +55,9 @@ void      page_camera_destroy(void);
 
 lv_obj_t *page_photos_create(lv_obj_t *parent);
 void      page_photos_destroy(void);
+
+lv_obj_t *page_music_create(lv_obj_t *parent);
+void      page_music_destroy(void);
 
 lv_obj_t *page_settings_create(lv_obj_t *parent);
 void      page_settings_destroy(void);

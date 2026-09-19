@@ -547,6 +547,12 @@ static const char *base_name(const char *path)
 
 app_mail_result_t app_mail_send_photos(const char *const *paths, int count)
 {
+    return app_mail_send_files(paths, count, "image/jpeg", "photo");
+}
+
+app_mail_result_t app_mail_send_files(const char *const *paths, int count,
+                                      const char *mime, const char *kind)
+{
     if (paths == NULL || count <= 0) {
         return APP_MAIL_ERR_NO_FILE;
     }
@@ -589,7 +595,7 @@ app_mail_result_t app_mail_send_photos(const char *const *paths, int count)
     int n = snprintf(hdr, sizeof(hdr),
                      "From: %s\r\n"
                      "To: %s\r\n"
-                     "Subject: ESP32S3_Ecam photo%s\r\n"
+                     "Subject: ESP32S3_Ecam %s%s\r\n"
                      "Date: %s\r\n"
                      "Message-ID: <ecam-%ld@%s>\r\n"
                      "MIME-Version: 1.0\r\n"
@@ -598,10 +604,10 @@ app_mail_result_t app_mail_send_photos(const char *const *paths, int count)
                      "--%s\r\n"
                      "Content-Type: text/plain; charset=UTF-8\r\n"
                      "\r\n"
-                     "%d photo(s) from the ESP32S3_Ecam camera, attached.\r\n",
-                     s.from, s.to, (count > 1) ? "s" : "",
+                     "%d %s(s) sent from the ESP32S3_Ecam, attached.\r\n",
+                     s.from, s.to, kind, (count > 1) ? "s" : "",
                      s.date, (long)s.sent_at, s.domain,
-                     MIME_BOUNDARY, MIME_BOUNDARY, count);
+                     MIME_BOUNDARY, MIME_BOUNDARY, count, kind);
     if (n < 0 || (size_t)n >= sizeof(hdr) ||
         smtp_write(&s.conn, hdr, (size_t)n) != 0) {
         r = APP_MAIL_ERR_SEND;
@@ -615,11 +621,11 @@ app_mail_result_t app_mail_send_photos(const char *const *paths, int count)
         /* 开头的 CRLF 结束文本段（base64 写出来的最后一行不带换行） */
         n = snprintf(part, sizeof(part),
                      "\r\n--%s\r\n"
-                     "Content-Type: image/jpeg; name=\"%s\"\r\n"
+                     "Content-Type: %s; name=\"%s\"\r\n"
                      "Content-Transfer-Encoding: base64\r\n"
                      "Content-Disposition: attachment; filename=\"%s\"\r\n"
                      "\r\n",
-                     MIME_BOUNDARY, fname, fname);
+                     MIME_BOUNDARY, mime, fname, fname);
         if (n < 0 || (size_t)n >= sizeof(part) ||
             smtp_write(&s.conn, part, (size_t)n) != 0) {
             r = APP_MAIL_ERR_SEND;

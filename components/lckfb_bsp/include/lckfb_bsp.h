@@ -162,7 +162,17 @@ bool bsp_boot_button_pressed(void);
 esp_err_t bsp_sdcard_mount(void);
 esp_err_t bsp_sdcard_unmount(void);
 bool bsp_sdcard_is_mounted(void);
-/* 供后续 USB MSC 模式取用；未挂载时返回 NULL */
+
+/*
+ * 只初始化卡本身（能读写扇区），**不挂 FATFS**。U 盘模式要用裸块设备，
+ * 而卸载 FATFS 会把 SDMMC 主机 deinit、卡结构体 free 掉，所以必须重新建一张。
+ * 用完调 bsp_sdcard_card_deinit()（或直接 bsp_sdcard_unmount()，它也会收）。
+ * 失败立刻返回错误，不会重试——这是从界面点进来的，不能把界面卡住。
+ */
+esp_err_t bsp_sdcard_card_init(void);
+void      bsp_sdcard_card_deinit(void);
+
+/* 取当前这张卡（不管 FATFS 有没有挂着）；没有卡时返回 NULL */
 sdmmc_card_t *bsp_sdcard_get_card(void);
 
 /*==============================================================================
@@ -200,28 +210,40 @@ esp_err_t bsp_camera_deinit(void);
 #define BSP_AUDIO_DIN       (GPIO_NUM_12)
 
 /*
- * 100 = 满。esp_codec_dev 的音量 API 只接受 0~100，超过会直接报参数错。
- * 映射关系（见 es8311.c 的 vol_range，0x00=-95.5dB、0xFF=+32dB，即 2 寄存器/dB）：
- *   vol 85 → DAC_REG32 = 183 (-3.9 dB)
- *   vol 100 → DAC_REG32 = 198 (+3.6 dB)
- * 注意 191 大致就是 0 dB（满量程）的位置，所以 100 已经在满量程之上——
- * 想让声音更大要靠素材本身的响度，不要再往上推这个寄存器，那只会削波。
+ * 音量 0~100。esp_codec_dev 的 API 只接受这个范围，超过会直接报参数错。
+ *
+ * 映射关系（从 es8311.c + esp_codec_dev_vol.c 算出来的，2026-09-20 复核）：
+ *   esp_codec_dev_col_calc_hw_gain() = 20·log10(dac/pa) = 20·log10(3.3/5.0) = -3.6 dB
+ *   es8311_set_vol() 里是 `db -= hw_gain`，等于把整条曲线整体抬高 3.6 dB
+ *   → 寄存器 = (音量曲线 + 3.6 + 95.5) × 2 = 音量 + 98（近似）
+ * 所以：
+ *   vol 85  → DAC_REG32 = 183 (-4.0 dB)
+ *   vol 93  → DAC_REG32 = 191 (**0 dB，满量程**)
+ *   vol 100 → DAC_REG32 = 198 (+3.6 dB，**在满量程之上**)
+ *
+ * **93 以上是给 DAC 加数字增益**，对任何接近满刻度的素材就是硬削顶——
+ * 那是白送的失真。所以 bsp_audio_volume_set() 会把它夹在 93。
+ * 想让声音更大要靠素材本身的响度，不要再往上推这个寄存器。
  */
-#define BSP_AUDIO_DEFAULT_VOLUME (100)
+#define BSP_AUDIO_DEFAULT_VOLUME (93)
+/* 音量上限：再往上就是数字增益（见上面），一律夹住 */
+#define BSP_AUDIO_VOLUME_MAX     (93)
 
 /*
- * 全工程只允许这一个播放采样率。boot 时按它打开 ES8311，之后改采样率
- * 一律拒绝（返回 ESP_ERR_NOT_SUPPORTED），原因见 bsp_audio_set_fs 的注释：
- * esp_codec_dev 的 close/open 路径会让 ES8311 的时钟分频器写不进去。
- * 要播别的采样率的素材，就在生成素材那一步重采样到它，不要在这里改。
+ * 开机默认采样率。boot 时先按它把 ES8311 打开，之后播放中允许按素材自己的
+ * 采样率切换（bsp_audio_set_fs），所以它不再是"全工程唯一的采样率"。
+ *
+ * 默认值刻意留在 16000：设置页的 Test Speaker 和那条已经验证过的通路都是按
+ * 16kHz 标的定，动它没有好处。
  */
 #define BSP_AUDIO_DEFAULT_RATE   (16000)
 
 esp_err_t  bsp_audio_init(void);
 /*
  * 重配 I2S 与 ES8311 的采样率/位宽/声道数。rate 为 0 时忽略。
- * **只支持开机第一次打开，以及和 BSP_AUDIO_DEFAULT_RATE 相同的重复调用**；
- * 其它采样率返回 ESP_ERR_NOT_SUPPORTED。这是刻意的，不是没实现。
+ * 只支持 16bit / 立体声（helix 解码输出恒为 16bit，单声道由播放侧转立体声），
+ * 采样率支持 8k~48k 里 coeff_div[] 有对应行的档位，见实现里的 s_supported_rates。
+ * 不支持的组合返回 ESP_ERR_NOT_SUPPORTED。
  */
 esp_err_t  bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels);
 esp_err_t  bsp_audio_write(void *buf, size_t len, size_t *written, uint32_t timeout_ms);

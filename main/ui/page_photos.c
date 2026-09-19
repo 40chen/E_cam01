@@ -71,6 +71,7 @@ static int         s_count = 0;
 static lv_obj_t   *s_title_lbl = NULL;
 static lv_obj_t   *s_del_btn = NULL;
 static lv_obj_t   *s_mail_all_btn = NULL;
+static lv_obj_t   *s_all_btn = NULL;        /* 全选/全不选，只在选择模式下露面 */
 
 /* 批量选择 */
 static bool        s_select_mode = false;
@@ -344,6 +345,8 @@ static void viewer_close(void)
  * 长按和拖动容易混在一起。
  *-------------------------------------------------------------------------*/
 
+static void set_selected(int idx, bool on);
+
 static void update_title(void)
 {
     if (s_title_lbl == NULL) {
@@ -360,14 +363,14 @@ static void update_title(void)
 
 static void update_buttons(void)
 {
-    if (s_del_btn == NULL || s_mail_all_btn == NULL) {
+    if (s_del_btn == NULL || s_mail_all_btn == NULL || s_all_btn == NULL) {
         return;
     }
 
     /*
-     * 两个按钮平级，都常驻标题栏：
-     *   - 网格模式：点任一个都进入选择模式（所以只要相册里有照片就能点）
-     *   - 选择模式：点哪个就执行哪个（邮件 / 删除），一张没选时都不给按
+     * 三个按钮平级，都在标题栏右侧：
+     *   - 网格模式：Email / Delete 点任一个都进入选择模式（只要相册里有照片就能点）
+     *   - 选择模式：点哪个就执行哪个（邮件 / 删除 / 全选），一张没选时前两个不给按
      * 不需要额外记"这次进来是想干嘛"——按钮自己就说明了。
      */
     bool usable = s_select_mode ? (s_selected_count > 0) : (s_count > 0);
@@ -378,6 +381,36 @@ static void update_buttons(void)
     } else {
         lv_obj_add_state(s_del_btn, LV_STATE_DISABLED);
         lv_obj_add_state(s_mail_all_btn, LV_STATE_DISABLED);
+    }
+
+    /*
+     * "全选"只在选择模式下露面：网格模式下它没有意义，而且三个按钮并排会把
+     * 标题挤没（上一版就是这么被删掉的）。选择模式下标题变成 "N selected"，
+     * 短得多，腾得出位置。
+     * 文字跟着当前状态变：还有没选中的显示 All，全选满了显示 None——一个
+     * 按钮兼两个方向，用户不用猜点下去是选还是取消。
+     */
+    if (!s_select_mode) {
+        lv_obj_add_flag(s_all_btn, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(s_all_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lv_obj_get_child(s_all_btn, 0),
+                      (s_selected_count < s_count) ? "All" : "None");
+    if (s_count > 0) {
+        lv_obj_clear_state(s_all_btn, LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(s_all_btn, LV_STATE_DISABLED);
+    }
+}
+
+/* 全选 / 全不选。已经全选中了再点一次就是全部取消，所以不需要两个按钮 */
+static void all_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    const bool select_all = (s_selected_count < s_count);
+    for (int i = 0; i < s_count; i++) {
+        set_selected(i, select_all);
     }
 }
 
@@ -1043,6 +1076,21 @@ lv_obj_t *page_photos_create(lv_obj_t *parent)
         lv_obj_set_style_text_font(dl, UI_FONT_BODY, 0);
         lv_obj_set_style_text_color(dl, lv_color_white(), 0);
         lv_obj_center(dl);
+
+        /* 全选按钮在最左边，默认藏起来（只有选择模式才显示，见 update_buttons） */
+        s_all_btn = lv_btn_create(bar);
+        lv_obj_set_size(s_all_btn, 44, UI_TITLE_BAR_H - 8);
+        lv_obj_align(s_all_btn, LV_ALIGN_RIGHT_MID, -96, 0);
+        lv_obj_set_style_bg_color(s_all_btn, UI_COLOR_ACCENT, 0);
+        lv_obj_set_style_radius(s_all_btn, UI_RADIUS_BTN, 0);
+        lv_obj_set_style_shadow_width(s_all_btn, 0, 0);
+        lv_obj_add_flag(s_all_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_event_cb(s_all_btn, all_clicked_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *al = lv_label_create(s_all_btn);
+        lv_label_set_text(al, "All");
+        lv_obj_set_style_text_font(al, UI_FONT_SMALL, 0);
+        lv_obj_set_style_text_color(al, lv_color_white(), 0);
+        lv_obj_center(al);
     }
 
     build_grid();
@@ -1083,4 +1131,5 @@ void page_photos_destroy(void)
     s_selected_count = 0;
     s_title_lbl = NULL;
     s_del_btn = NULL;
+    s_all_btn = NULL;
 }
