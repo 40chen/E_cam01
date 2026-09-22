@@ -28,6 +28,9 @@ static const page_desc_t s_pages[UI_PAGE_COUNT] = {
     [UI_PAGE_PHOTOS]   = { page_photos_create,   page_photos_destroy },
     [UI_PAGE_MUSIC]    = { page_music_create,    page_music_destroy },
     [UI_PAGE_SETTINGS] = { page_settings_create, page_settings_destroy },
+    [UI_PAGE_WORKMODE] = { page_workmode_create, page_workmode_destroy },
+    [UI_PAGE_MODULES]  = { page_modules_create,  page_modules_destroy  },
+    [UI_PAGE_PCMON]    = { page_pcmon_create,    page_pcmon_destroy    },
 };
 
 /*---------------------------------------------------------------------------
@@ -172,6 +175,9 @@ ui_page_id_t ui_current_page(void)
 void ui_open_photos(void)    { ui_goto_async(UI_PAGE_PHOTOS); }
 void ui_open_music(void)    { ui_goto_async(UI_PAGE_MUSIC); }
 void ui_open_settings(void) { ui_goto_async(UI_PAGE_SETTINGS); }
+void ui_open_workmode(void) { ui_goto_async(UI_PAGE_WORKMODE); }
+void ui_open_modules(void)  { ui_goto_async(UI_PAGE_MODULES); }
+void ui_open_pcmon(void)    { ui_goto_async(UI_PAGE_PCMON); }
 
 /*---------------------------------------------------------------------------
  * 初始化

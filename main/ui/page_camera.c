@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "app_camera.h"
+#include "app_sound.h"
 #include "app_storage.h"
 #include "lckfb_bsp.h"
 #include "ui.h"
@@ -151,6 +152,34 @@ static void back_cb(lv_event_t *e)
 }
 
 /*---------------------------------------------------------------------------
+ * 快门声
+ *
+ * 必须放自己的任务里：app_sound_play_pcm() 会阻塞在 I2S 写入上（写完还要等
+ * DMA 排空），占着 LVGL 任务的话这段时间触摸采样整段丢失。
+ *
+ * 优先级 5 比 LVGL 的 4 高，是为了让"咔"紧跟快门，而不是等界面这一轮画完。
+ * 它在 I2S 写入上很快就把 CPU 让出去了，不会真把界面压住。
+ *-------------------------------------------------------------------------*/
+static void shutter_sound_task(void *arg)
+{
+    (void)arg;
+    app_sound_play_shutter();
+    vTaskDelete(NULL);
+}
+
+static void play_shutter_sound(void)
+{
+    if (!app_sound_shutter_enabled()) {
+        return;
+    }
+    /* 建任务失败就只是没声音，不弹提示：拍照本身成功了，用户看到的是照片。
+     * app_sound 那边会把失败原因打进串口 */
+    if (xTaskCreate(shutter_sound_task, "shutter_snd", 3072, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "no memory for shutter sound task");
+    }
+}
+
+/*---------------------------------------------------------------------------
  * 拍完定格
  *-------------------------------------------------------------------------*/
 #define FREEZE_MS 1000
@@ -186,6 +215,8 @@ static void trigger_capture(void)
         lv_obj_add_state(s_shutter, LV_STATE_DISABLED);
     }
 
+    play_shutter_sound();
+
     /*
      * 定格 1 秒，让用户看清拍到的画面。
      *
@@ -214,6 +245,73 @@ static void shutter_cb(lv_event_t *e)
 {
     (void)e;
     trigger_capture();
+}
+
+/*---------------------------------------------------------------------------
+ * 滤镜：快门左右各一个
+ *
+ * 走传感器寄存器（app_camera_set_effect），所以**预览和存下来的照片一起变**。
+ * 两个按钮是一组单选，再点一次当前那个 = 关掉（回到无滤镜）——多一个"都不选"
+ * 的出口，比在 56px 高的控制条里再塞一个 None 按钮省地方。
+ *-------------------------------------------------------------------------*/
+#define FILTER_BTN_W   60
+#define FILTER_BTN_H   32
+#define FILTER_BTN_OFS 80          /* 相对快门中心的水平偏移 */
+
+static lv_obj_t *s_btn_filter[2] = { NULL, NULL };
+static const app_camera_effect_t s_filter_effect[2] = {
+    APP_CAM_EFFECT_GRAYSCALE, APP_CAM_EFFECT_NEGATIVE,
+};
+static const char *const s_filter_text[2] = { "B&W", "Neg" };
+
+static void refresh_filter_buttons(void)
+{
+    const app_camera_effect_t cur = app_camera_get_effect();
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *b = s_btn_filter[i];
+        if (b == NULL) {
+            continue;
+        }
+        const bool on = (cur == s_filter_effect[i]);
+        /* 选中态是强调色实心；没选中是白色半透明，压在底部那条黑色半透明
+         * 控制条上刚好能看见，又不至于抢快门的注意力 */
+        lv_obj_set_style_bg_color(b, on ? UI_COLOR_ACCENT : lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(b, on ? LV_OPA_COVER : LV_OPA_20, 0);
+    }
+}
+
+static void filter_cb(lv_event_t *e)
+{
+    const int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    const app_camera_effect_t cur = app_camera_get_effect();
+    const app_camera_effect_t next =
+        (cur == s_filter_effect[idx]) ? APP_CAM_EFFECT_NORMAL : s_filter_effect[idx];
+
+    esp_err_t err = app_camera_set_effect(next);
+    if (err != ESP_OK) {
+        /* 传感器或驱动不认这个特效。界面照样切过去没有意义，提示一句就停 */
+        show_toast("Filter not available", UI_COLOR_DANGER);
+        return;
+    }
+    refresh_filter_buttons();
+}
+
+static lv_obj_t *create_filter_button(lv_obj_t *parent, int idx)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, FILTER_BTN_W, FILTER_BTN_H);
+    lv_obj_set_style_radius(btn, FILTER_BTN_H / 2, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_ext_click_area(btn, 8);
+    lv_obj_add_event_cb(btn, filter_cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, s_filter_text[idx]);
+    lv_obj_set_style_text_font(lbl, UI_FONT_BODY, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_center(lbl);
+
+    return btn;
 }
 
 /*---------------------------------------------------------------------------
@@ -332,6 +430,15 @@ lv_obj_t *page_camera_create(lv_obj_t *parent)
     lv_obj_set_style_outline_pad(s_shutter, 3, 0);
     lv_obj_add_event_cb(s_shutter, shutter_cb, LV_EVENT_CLICKED, NULL);
 
+    /* 快门左右各一个滤镜。控制条 320 宽、快门 40 居中，两边各剩 140，
+     * 放 60 宽的药丸按钮绰绰有余，偏移 80 之后离屏幕边缘还有 50 */
+    s_btn_filter[0] = create_filter_button(bottom, 0);
+    lv_obj_align(s_btn_filter[0], LV_ALIGN_CENTER, -FILTER_BTN_OFS, 0);
+    s_btn_filter[1] = create_filter_button(bottom, 1);
+    lv_obj_align(s_btn_filter[1], LV_ALIGN_CENTER, FILTER_BTN_OFS, 0);
+    /* 恢复上一次的选择：滤镜存在 app_camera 里跨页面活着 */
+    refresh_filter_buttons();
+
     /* Boot 键拍照：轮询定时器只在取景页存活 */
     s_capturing = false;
     if (bsp_boot_button_init() == ESP_OK) {
@@ -380,4 +487,6 @@ void page_camera_destroy(void)
     s_img = NULL;
     s_shutter = NULL;
     s_toast = NULL;
+    s_btn_filter[0] = NULL;
+    s_btn_filter[1] = NULL;
 }

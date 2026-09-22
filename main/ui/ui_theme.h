@@ -94,6 +94,26 @@ lv_obj_t *ui_card_create(lv_obj_t *parent);
 lv_obj_t *ui_list_row_create(lv_obj_t *parent, const char *label,
                              const char *value, bool show_arrow);
 
+/*
+ * 上面那个的可点击版本：置上 CLICKABLE 并挂好回调，省得每个页面各写一遍。
+ * cb 可以为 NULL（那就只是一行不可点的展示）。
+ */
+lv_obj_t *ui_list_row_create_clickable(lv_obj_t *parent, const char *label,
+                                       const char *value, bool show_arrow,
+                                       lv_event_cb_t cb, void *user);
+
+/*
+ * 列表里的小节标题（"NETWORK" 那种小号灰字），组与组之间的空隙靠它的
+ * pad_top 撑出来。page_settings / page_workmode 共用同一套排版。
+ */
+lv_obj_t *ui_section_create(lv_obj_t *parent, const char *title);
+
+/*
+ * 一行下面的一行小灰字说明。列表行的标题只放得下几个词，"这个开关到底
+ * 会把设备变成什么"得另找个地方讲清楚。
+ */
+lv_obj_t *ui_list_note_create(lv_obj_t *parent, const char *text);
+
 /* 更新某一行右侧的值文本（ui_list_row_create 的返回值） */
 void ui_list_row_set_value(lv_obj_t *row, const char *value);
 

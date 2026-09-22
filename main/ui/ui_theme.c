@@ -170,6 +170,44 @@ void ui_list_row_set_value(lv_obj_t *row, const char *value)
     }
 }
 
+lv_obj_t *ui_list_row_create_clickable(lv_obj_t *parent, const char *label,
+                                       const char *value, bool show_arrow,
+                                       lv_event_cb_t cb, void *user)
+{
+    lv_obj_t *row = ui_list_row_create(parent, label, value, show_arrow);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    if (cb != NULL) {
+        lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user);
+    }
+    return row;
+}
+
+lv_obj_t *ui_section_create(lv_obj_t *parent, const char *title)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, title);
+    lv_obj_set_style_text_font(lbl, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT_SUB, 0);
+    /* 组间空隙用 pad_top 做（LVGL 8 没有 margin） */
+    lv_obj_set_style_pad_top(lbl, 8, 0);
+    return lbl;
+}
+
+lv_obj_t *ui_list_note_create(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT_SUB, 0);
+    /* 跟在某一行后面，往上收一点、往左缩一点，读起来是"附在那行下面的" */
+    lv_obj_set_style_pad_top(lbl, 2, 0);
+    lv_obj_set_style_pad_left(lbl, 4, 0);
+    /* 自动换行：说明都不短，不换行会顶出屏幕 */
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    return lbl;
+}
+
 lv_obj_t *ui_round_button_create(lv_obj_t *parent, int diameter, lv_color_t color)
 {
     lv_obj_t *btn = lv_btn_create(parent);

@@ -697,6 +697,30 @@ static lv_obj_t *deco_create(lv_obj_t *parent)
     return o;
 }
 
+/*
+ * 黑胶的配色。
+ *
+ * 原来盘面是黑的、中心纸标用的是主题的 iOS 蓝，整体是"蓝黑"。这里整套换成
+ * 红黑，几个决定：
+ *
+ *  - **盘面不用纯黑**（0x000000）。屏幕底色是 iOS 灰、视觉区是浅色卡片，
+ *    纯黑倒也不算撞色，但盘面纹理要在盘上分层，纯黑没有"底色再往下压"的
+ *    余量。这里用近黑，并且**带一点红调**（R 通道比 G/B 高），和红纹路是
+ *    同一族色，整体才不会像"黑盘上贴了几道红胶带"。
+ *  - **外圈加一道深红描边**：盘面近黑、卡片是白的，边界本来靠明度差就够；
+ *    但往下滚动时视觉区会贴着深色进度条，加这一圈让盘的轮廓在任何背景上
+ *    都成立。
+ *  - **中心孔用盘面色而不是屏幕底色**。原来开的是浅灰的洞，那是"红色圆环
+ *    中间有个洞"；换成盘面色才是唱片"中间那个孔"。纸标因此变成一个红环。
+ *  - 高光弧沿用主题里的 DANGER 红——调色板里只有这一个亮红，另起一个色值
+ *    不如跟着走；它在近黑盘面上对比足够。
+ */
+#define VINYL_DISC     lv_color_hex(0x140A0B)   /* 盘面：近黑带红调 */
+#define VINYL_RIM      lv_color_hex(0x8E1418)   /* 外圈深红描边 */
+#define VINYL_GROOVE   lv_color_hex(0x3A1518)   /* 同心纹路 */
+#define VINYL_LABEL    lv_color_hex(0xC01A1F)   /* 中心纸标 */
+#define VINYL_HILIGHT  UI_COLOR_DANGER          /* 高光弧（转起来的那道） */
+
 /* 全用图元画，不需要素材。旋转只改 lv_arc 自带的 rotation（转一段高光弧的
  * 起始角），不走 LVGL 的 transform_angle 图层变换——那条路每帧要把整块
  * 区域重新渲染一遍，而这里每拍只重绘一条细弧。 */
@@ -714,8 +738,10 @@ static void build_vinyl(lv_obj_t *parent)
     lv_obj_t *disc = deco_create(s_vinyl);
     lv_obj_set_size(disc, DISC_D, DISC_D);
     lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(disc, lv_color_hex(0x121212), 0);
+    lv_obj_set_style_bg_color(disc, VINYL_DISC, 0);
     lv_obj_set_style_bg_opa(disc, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(disc, 2, 0);
+    lv_obj_set_style_border_color(disc, VINYL_RIM, 0);
     /* 左边（给右边的竖排音量条让出位置）：视觉区 320 宽，音量条占最右约 36px，
      * 所以把盘子居中在剩下的 284px 里 → 中心 142，盘子 124 宽 → 左边缘 80 */
     lv_obj_align(disc, LV_ALIGN_LEFT_MID, 80, 0);
@@ -729,22 +755,31 @@ static void build_vinyl(lv_obj_t *parent)
         lv_obj_set_size(g, d, d);
         lv_obj_set_style_radius(g, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(g, 1, 0);
-        lv_obj_set_style_border_color(g, lv_color_hex(0x2E2E2E), 0);
+        lv_obj_set_style_border_color(g, VINYL_GROOVE, 0);
         lv_obj_center(g);
     }
+
+    /* 纸标外面一圈亮红细环。纹路到纸标之间原来是硬切过去的，垫这一圈之后
+     * 红纸标像是"嵌在盘里"，而不是飘在黑底上 */
+    lv_obj_t *halo = deco_create(disc);
+    lv_obj_set_size(halo, DISC_D * 42 / 100, DISC_D * 42 / 100);
+    lv_obj_set_style_radius(halo, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(halo, 1, 0);
+    lv_obj_set_style_border_color(halo, VINYL_HILIGHT, 0);
+    lv_obj_center(halo);
 
     /* 中央的纸标 + 中心孔 */
     lv_obj_t *label = deco_create(disc);
     lv_obj_set_size(label, DISC_D * 34 / 100, DISC_D * 34 / 100);
     lv_obj_set_style_radius(label, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(label, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_bg_color(label, VINYL_LABEL, 0);
     lv_obj_set_style_bg_opa(label, LV_OPA_COVER, 0);
     lv_obj_center(label);
 
     lv_obj_t *hole = deco_create(label);
     lv_obj_set_size(hole, 8, 8);
     lv_obj_set_style_radius(hole, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(hole, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_color(hole, VINYL_DISC, 0);
     lv_obj_set_style_bg_opa(hole, LV_OPA_COVER, 0);
     lv_obj_center(hole);
 
@@ -756,7 +791,7 @@ static void build_vinyl(lv_obj_t *parent)
     lv_arc_set_bg_angles(s_disc_arc, 0, 360);
     lv_obj_set_style_arc_opa(s_disc_arc, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_disc_arc, 3, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_disc_arc, lv_color_hex(0x4A4A4A), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_disc_arc, VINYL_HILIGHT, LV_PART_INDICATOR);
     lv_arc_set_angles(s_disc_arc, 0, 40);
     /* 歌名放在标题栏上（见 open_big_mode），视觉区整块留给唱片/歌词，
      * 所以这里不再另外挂一个歌名 label——它会压在盘面下缘上 */

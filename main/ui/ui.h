@@ -24,6 +24,9 @@ typedef enum {
     UI_PAGE_PHOTOS,
     UI_PAGE_MUSIC,
     UI_PAGE_SETTINGS,
+    UI_PAGE_WORKMODE,       /* 工作模式：会改变整机形态的开关 */
+    UI_PAGE_MODULES,        /* 外接模块：插在 GPIO10/11 上的外设 */
+    UI_PAGE_PCMON,          /* 副屏：上位机推过来的系统状态 */
     UI_PAGE_COUNT,
 } ui_page_id_t;
 
@@ -62,10 +65,22 @@ void      page_music_destroy(void);
 lv_obj_t *page_settings_create(lv_obj_t *parent);
 void      page_settings_destroy(void);
 
+lv_obj_t *page_workmode_create(lv_obj_t *parent);
+void      page_workmode_destroy(void);
+
+lv_obj_t *page_modules_create(lv_obj_t *parent);
+void      page_modules_destroy(void);
+
+lv_obj_t *page_pcmon_create(lv_obj_t *parent);
+void      page_pcmon_destroy(void);
+
 /* 主菜单按钮触发的动作，供 page_home.c 使用 */
 void ui_open_photos(void);
 void ui_open_music(void);
 void ui_open_settings(void);
+void ui_open_workmode(void);
+void ui_open_modules(void);
+void ui_open_pcmon(void);
 
 #ifdef __cplusplus
 }

@@ -2,24 +2,27 @@
  * page_settings.c — 设置页
  *
  * 分组列表：Network（WiFi 凭据 + 实时状态）/ Mail（SMTP 与邮箱）/ Storage
- * （只读）/ Reset（带二次确认的擦除）。凭据通过 ui_input 软键盘输入，
- * 存 NVS（app_settings），保存 SSID 后立即发起连接（app_wifi）。
+ * （只读剩余空间）/ Sound（快门声开关 + 音量）/ Reset（带二次确认的擦除）。
+ * 凭据通过 ui_input 软键盘输入，存 NVS（app_settings），保存 SSID 后立即
+ * 发起连接（app_wifi）。
+ *
+ * 会改变整机形态的开关（U 盘模式、副屏）**不在这里**，在工作模式页。
  *
  * 状态行用 lv_timer 每秒刷新，和 page_home.c 刷 TF 卡图标同一套路。
  */
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "app_audio.h"
 #include "app_mail.h"
 #include "app_settings.h"
+#include "app_sound.h"
 #include "app_storage.h"
 #include "app_wifi.h"
 #include "lckfb_bsp.h"
@@ -28,7 +31,6 @@
 #include "ui_input.h"
 #include "ui_scan.h"
 #include "ui_theme.h"
-#include "ui_usbmsc.h"
 
 static const char *TAG = "page_settings";
 
@@ -41,34 +43,53 @@ static lv_obj_t *s_row_from = NULL;
 static lv_obj_t *s_row_mailpass = NULL;
 static lv_obj_t *s_row_to = NULL;
 static lv_obj_t *s_row_free = NULL;
-static lv_obj_t *s_row_usb = NULL;
 static lv_obj_t *s_row_testmail = NULL;
-static lv_obj_t *s_row_tone = NULL;
 static lv_timer_t *s_status_timer = NULL;
 
 /*---------------------------------------------------------------------------
  * 小工具
+ *
+ * 两个都只是 ui_theme 里公共控件的薄包装：这里的调用点有二十来处，全部改成
+ * 直接调公共版本会把这一页的 diff 摊得很大，而包装的意义就在于"设置页的列表
+ * 长什么样"这个约定只写一处。工作模式页用的是同一对公共控件，两边排版一致。
  *-------------------------------------------------------------------------*/
 static lv_obj_t *add_section(lv_obj_t *parent, const char *title)
 {
-    lv_obj_t *lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, title);
-    lv_obj_set_style_text_font(lbl, UI_FONT_SMALL, 0);
-    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT_SUB, 0);
-    /* 组间空隙用 pad_top 做（LVGL 8 没有 margin） */
-    lv_obj_set_style_pad_top(lbl, 8, 0);
-    return lbl;
+    return ui_section_create(parent, title);
 }
 
 static lv_obj_t *add_row(lv_obj_t *parent, const char *label, const char *value,
                          bool arrow, lv_event_cb_t cb, void *user)
 {
-    lv_obj_t *row = ui_list_row_create(parent, label, value, arrow);
-    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    if (cb != NULL) {
-        lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user);
+    return ui_list_row_create_clickable(parent, label, value, arrow, cb, user);
+}
+
+/*
+ * 带开关的列表行。返回开关对象（挂回调用）。
+ *
+ * 两件事 ui_list_row_create 不管，这里补上：
+ *   1. **值文本要让开右边的开关**：它默认右对齐在 -0，而开关占最右 44px，
+ *      直接写值会糊在开关底下。挪到 -50。（现在没有开关行写值文本，但这条
+ *      约束是真的踩出来过的——哪天真要往这儿写字，别再从 -0 开始试。）
+ *   2. 开关的 user_data 指向**行**，回调里要拿行（比如写值文本）就从这儿取。
+ */
+static lv_obj_t *add_switch_row(lv_obj_t *parent, const char *label,
+                                lv_event_cb_t cb)
+{
+    lv_obj_t *row = ui_list_row_create(parent, label, "", false);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);      /* 只有开关可点 */
+
+    lv_obj_t *val = (lv_obj_t *)lv_obj_get_user_data(row);
+    if (val != NULL) {
+        lv_obj_align(val, LV_ALIGN_RIGHT_MID, -50, 0);
     }
-    return row;
+
+    lv_obj_t *sw = lv_switch_create(row);
+    lv_obj_set_size(sw, 44, 22);
+    lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_user_data(sw, row);
+    lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
+    return sw;
 }
 
 /*---------------------------------------------------------------------------
@@ -294,119 +315,96 @@ static void row_testmail_cb(lv_event_t *e)
 }
 
 /*---------------------------------------------------------------------------
- * 测试扬声器
+ * 声音：快门声开关 + 音量
  *
- * 放 1.5 秒 440Hz 正弦，**运行时生成**，不占 flash。单声道复制成两声道。
+ * **原来这里是三行测试工具**（Test Speaker 放 440Hz 长音、Shutter Sound 换音色
+ * 试听、Speaker Bands 扫六个频点）。那是"快门声听不见"排查期间的临时产物，
+ * 2026-09-22 定位到是素材问题之后按需求收成两行。
  *
- * 这一行存在的意义是把"没声音"这件事一次性分成两半：1.5 秒的长音如果又响
- * 又完整，说明 I2S → ES8311 → 功放整条通路是通的，问题只可能在音效素材；
- * 如果它也只是短短一下、而且改音量也毫无反应，那通路是死的——那种"短短
- * 一下"是功放使能（PCA9557 bit1）的开关瞬态，跟 PCM 内容毫无关系。
+ * 诊断能力没有丢：**拖动音量滑条、松手会放一声快门声**——既让你听清当前音量，
+ * 也就顺带验了"I2S → ES8311 → 功放"这条通路还通不通（原来那是 Test Speaker
+ * 的活）。要再扫频段的话，代码在 git 历史里。
+ *
+ * 这两个都**只存在内存里，掉电回到默认（开 / 50）**，跟音乐页那个音量一样。
+ * 要落盘得给 app_settings 加键。
  *-------------------------------------------------------------------------*/
-#define TEST_TONE_HZ     440
-#define TEST_TONE_MS     1500
-/* 一块 4096 帧 ≈ 256ms。必须明显大于 I2S 的 DMA 环形缓冲（约 90ms），
- * 否则每块之间会断一下，听起来是"嘟嘟嘟"而不是连续的长音 */
-#define TEST_TONE_CHUNK  4096
-#define TEST_TONE_AMP    19660          /* int16 满量程的 60% */
+static lv_obj_t *s_sw_shutter;
+static lv_obj_t *s_sl_vol;
 
-static void tone_done_async(void *arg)
+static void shutter_switch_cb(lv_event_t *e)
 {
-    esp_err_t err = (esp_err_t)(intptr_t)arg;
-    if (s_row_tone != NULL) {
-        lv_obj_clear_state(s_row_tone, LV_STATE_DISABLED);
-    }
-    ui_toast_show(err == ESP_OK ? "Test tone done" : esp_err_to_name(err),
-                  err == ESP_OK ? lv_color_white() : UI_COLOR_DANGER);
+    lv_obj_t *sw = lv_event_get_target(e);
+    app_sound_set_shutter_enabled(lv_obj_has_state(sw, LV_STATE_CHECKED));
 }
 
-static void test_tone_task(void *arg)
+/*
+ * 调音量的试听。放自己的任务里：app_sound_play_pcm() 会阻塞在 I2S 写入上
+ * （写完还要等 DMA 排空），占着 LVGL 任务的话这段时间触摸整段丢。
+ */
+static void volume_preview_task(void *arg)
 {
     (void)arg;
-    esp_err_t result = ESP_FAIL;
-
-    /* 用户可能压根没进过取景页，音频从没初始化过。bsp_audio_init 可重复调用 */
-    esp_err_t aerr = bsp_audio_init();
-    if (aerr != ESP_OK) {
-        ESP_LOGE(TAG, "audio init failed: %s", esp_err_to_name(aerr));
-        lv_async_call(tone_done_async, (void *)(intptr_t)aerr);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    const int chunk_bytes = TEST_TONE_CHUNK * 2 * (int)sizeof(int16_t);
-    int16_t *buf = heap_caps_malloc(chunk_bytes, MALLOC_CAP_DMA);
-    if (buf == NULL) {
-        ESP_LOGE(TAG, "no DMA mem for test tone (%d bytes)", chunk_bytes);
-        lv_async_call(tone_done_async, (void *)(intptr_t)ESP_ERR_NO_MEM);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    const int total = (int)((int64_t)BSP_AUDIO_DEFAULT_RATE * TEST_TONE_MS / 1000);
-    const double step = 2.0 * M_PI * TEST_TONE_HZ / BSP_AUDIO_DEFAULT_RATE;
-    double phase = 0.0;
-    int done = 0;
-    size_t total_written = 0;
-
-    esp_err_t paerr = bsp_pa_en(1);
-    while (done < total) {
-        int n = total - done;
-        if (n > TEST_TONE_CHUNK) {
-            n = TEST_TONE_CHUNK;
-        }
-        for (int i = 0; i < n; i++) {
-            int16_t s = (int16_t)(sin(phase) * TEST_TONE_AMP);
-            phase += step;
-            if (phase > 2.0 * M_PI) {
-                phase -= 2.0 * M_PI;
-            }
-            buf[i * 2] = s;
-            buf[i * 2 + 1] = s;
-        }
-        size_t w = 0;
-        esp_err_t err = bsp_audio_write(buf, (size_t)n * 4, &w, 2000);
-        total_written += w;
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "test tone write failed at %d/%d frames: %s",
-                     done, total, esp_err_to_name(err));
-            break;
-        }
-        done += n;
-    }
-    /* 写入返回时 DMA 里还剩一圈没放完，等它出来再关功放 */
-    vTaskDelay(pdMS_TO_TICKS(120));
-    bsp_pa_en(0);
-
-    /*
-     * 这一行是排查"没声音"最有价值的输出：真实写进 I2S 的字节数。
-     *   wrote 对得上但还是没声音 → 问题在 I2S 之后（ES8311 / 功放）
-     *   wrote 对不上             → 问题在写入这一步
-     */
-    ESP_LOGI(TAG, "test tone: %d Hz %d ms | wrote %u/%u bytes | pa1=%s",
-             TEST_TONE_HZ, TEST_TONE_MS,
-             (unsigned)total_written, (unsigned)((size_t)total * 4),
-             esp_err_to_name(paerr));
-
-    result = (done >= total) ? ESP_OK : ESP_FAIL;
-    free(buf);
-    lv_async_call(tone_done_async, (void *)(intptr_t)result);
+    /* 开关关着也要出声：这是一次明确的"我要听"的动作，不是拍照时的反馈 */
+    app_sound_play_shutter_preview();
     vTaskDelete(NULL);
 }
 
-static void row_tone_cb(lv_event_t *e)
+static void volume_changed_cb(lv_event_t *e)
 {
-    (void)e;
-    if (s_row_tone != NULL) {
-        lv_obj_add_state(s_row_tone, LV_STATE_DISABLED);   /* 防连点 */
+    lv_obj_t *sl = lv_event_get_target(e);
+    const int v = (int)lv_slider_get_value(sl);
+
+    /*
+     * **先把音频通路初始化出来再设音量**。bsp_audio_volume_set() 在没初始化时
+     * 直接返回 ESP_ERR_INVALID_STATE，值既到不了 ES8311、也不会被 BSP 记下来
+     * ——那样滑条拖了没反应，看着像滑条坏了。bsp_audio_init() 可重复调用。
+     */
+    if (bsp_audio_init() == ESP_OK) {
+        app_audio_set_volume(v);
     }
-    ui_toast_show("Playing...", lv_color_white());
-    if (xTaskCreate(test_tone_task, "tone", 4096, NULL, 6, NULL) != pdPASS) {
-        if (s_row_tone != NULL) {
-            lv_obj_clear_state(s_row_tone, LV_STATE_DISABLED);
-        }
-        ui_toast_show("Out of memory", UI_COLOR_DANGER);
+
+    /*
+     * 百分比那条值文本挂在**行**的 user_data 上（ui_list_row_create 放进去的），
+     * 不是在滑条上——所以要先往上找一层。直接从滑条取会永远拿到 NULL，
+     * 数字不动，而且不报错。
+     */
+    lv_obj_t *val = (lv_obj_t *)lv_obj_get_user_data(lv_obj_get_parent(sl));
+    if (val != NULL) {
+        lv_label_set_text_fmt(val, "%d", v);
     }
+
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        return;                 /* 拖动中只跟值和数字，不反复出声 */
+    }
+    /* RELEASED：出声试听 */
+    if (xTaskCreate(volume_preview_task, "vol", 3072, NULL, 6, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "no memory for volume preview task");
+    }
+}
+
+/*
+ * 音量那一行：左边 "Volume"、中间滑条、右边百分比。
+ *
+ * 滑条的宽度和偏移是量出来的（tools/measure_font.py）：行内容宽 280，
+ * 标签 "Volume"(16px) 占 60、右侧三位数占 25，中间剩 170——取 150 留间距。
+ */
+static void add_volume_row(lv_obj_t *parent, int initial)
+{
+    lv_obj_t *row = ui_list_row_create(parent, "Volume", "", false);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);   /* 只有滑条可点 */
+    lv_obj_t *val = (lv_obj_t *)lv_obj_get_user_data(row);
+    if (val != NULL) {
+        lv_label_set_text_fmt(val, "%d", initial);
+    }
+
+    s_sl_vol = lv_slider_create(row);
+    lv_obj_set_size(s_sl_vol, 150, 18);
+    lv_obj_align(s_sl_vol, LV_ALIGN_RIGHT_MID, -56, 0);
+    lv_slider_set_range(s_sl_vol, 0, 100);
+    lv_slider_set_value(s_sl_vol, initial, LV_ANIM_OFF);
+    lv_obj_set_ext_click_area(s_sl_vol, 8);
+    lv_obj_add_event_cb(s_sl_vol, volume_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_sl_vol, volume_changed_cb, LV_EVENT_RELEASED, NULL);
 }
 
 /*---------------------------------------------------------------------------
@@ -552,14 +550,6 @@ static void status_timer_cb(lv_timer_t *t)
     }
 }
 
-static void row_usb_cb(lv_event_t *e)
-{
-    (void)e;
-    /* 进模式 + 弹模式页都在这里；失败（没插卡、建卡失败）会自己弹提示条。
-     * 模式页是盖在 lv_layer_top() 上的浮层，关掉就回到本页 */
-    ui_usbmsc_open();
-}
-
 static void refresh_storage(void)
 {
     if (!app_storage_ready()) {
@@ -620,22 +610,23 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
                              true, row_testmail_cb, NULL);
 
     /* ---- Sound ----
-     * 一个能直接验证喇叭通不通的地方。也用来区分"音效素材太轻"和
-     * "整条音频通路没接通"——见 test_tone_task 的注释 */
+     * 开关 + 音量两行，见上面那段注释（原来是三行测试工具） */
     add_section(content, "SOUND");
-    s_row_tone = add_row(content, "Test Speaker", "", true, row_tone_cb, NULL);
+
+    s_sw_shutter = add_switch_row(content, "Shutter Sound", shutter_switch_cb);
+    if (app_sound_shutter_enabled()) {
+        lv_obj_add_state(s_sw_shutter, LV_STATE_CHECKED);
+    }
+
+    int vol = 50;
+    app_audio_get_volume(&vol);
+    add_volume_row(content, vol);
+    ui_list_note_create(content, "Drag, then let go to hear it.");
+
 
     /* ---- Storage ---- */
     add_section(content, "STORAGE");
     s_row_free = add_row(content, "Free space", "", false, NULL, NULL);
-    /*
-     * U 盘模式：把 TF 卡交给电脑当读卡器。这是**唯一会改挂载状态**的开关，
-     * 放在 Storage 组里——它影响的就是存储本身。
-     * 进模式期间卡归电脑，本页的 Free space 会显示 No TF card，属正常。
-     * 没插卡时也让点，由 ui_usbmsc_open() 弹一句 "No TF card"，
-     * 比把整行置灰更容易看出原因。
-     */
-    s_row_usb = add_row(content, "USB Drive", "", true, row_usb_cb, NULL);
     refresh_storage();
 
     /* ---- Reset ---- */
@@ -667,7 +658,7 @@ void page_settings_destroy(void)
     s_row_mailpass = NULL;
     s_row_to = NULL;
     s_row_free = NULL;
-    s_row_usb = NULL;
     s_row_testmail = NULL;
-    s_row_tone = NULL;
+    s_sw_shutter = NULL;
+    s_sl_vol = NULL;
 }

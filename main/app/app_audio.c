@@ -402,6 +402,7 @@ static bool play_file(int index, int *next_out)
     bool     paused = false;
     int32_t  seek_to = -1;
     bool     ok = true;             /* 正常放完 = true */
+    bool     next_set = false;      /* *next_out 是否已经被"切歌"那条路填过了 */
     int      bad_frames = 0;        /* 本文件跳过的坏帧数，日志限流用 */
 
     s_frames_done = 0;
@@ -451,6 +452,7 @@ static bool play_file(int index, int *next_out)
         }
         if (switch_to) {
             *next_out = (next_index >= 0 && next_index < s_track_count) ? next_index : -1;
+            next_set = true;
             goto done;
         }
 
@@ -626,6 +628,20 @@ static bool play_file(int index, int *next_out)
     }
 
 done:
+    /*
+     * **自然放完就接着放下一首。** 这一句以前没有，所以"自动连播"从来没生效过：
+     * *next_out 只在按了下一首/上一首那条路上被赋值，自然结束时它还是调用方
+     * 初始化的 -1，run_playback 就当成"播放列表放完了"直接收摊。界面上看着
+     * 一切正常（进度条走到头、状态回到 IDLE），只是歌不放第二首。
+     *
+     * **列表放完就停**，不绕回第一首——按了"下一首"按钮才是绕回的（见
+     * app_audio_play_next）。想让它循环的话，这里改成 `(index + 1) % s_track_count`
+     * 就行，但那样就没法靠"让它放完"停下来了。
+     */
+    if (ok && !next_set) {
+        *next_out = (index + 1 < s_track_count) ? index + 1 : -1;
+    }
+
     fclose(fp);
     read_ptr = NULL;
     buf_used = 0;

@@ -57,23 +57,40 @@
    `esp_err.h`/`esp_log.h`/`strlcpy`，编译 `app_lyrics.c` + `gb2312_table.c`），
    比对着一行行读代码快得多，而且能覆盖上板试不到的畸形输入。
 
-## 快门声（2026-09-19 移除）
+## 快门声（2026-09-19 移除 → 2026-09-22 恢复）
+
+> **这个功能已经恢复了，而且已经定稿，见工程 README 的"拍照 → 快门声"一节。**
+> 2026-09-22 一天里走了三步：换喇叭（2828 4Ω 3W）后恢复 → 编三个候选
+> （`Raw`/`Loud`/`Body`）在板子上点着听、仍然不行 → **换素材**
+> （`assets/clear-camera-shutter-sound.mp3`）之后三个候选都有声音了，定稿 `Raw`。
+>
+> **一个诚实的保留**：两轮之间同时换过喇叭和素材，**没有做隔离实验**，所以"到底是
+> 哪一个修好的"并不确定。用户的判断是素材问题，工程按这个结论走。真要再查，
+> 当时写过一段 100 行的扫频测试（`Settings → Speaker Bands`，依次放
+> 250/500/1k/2k/4k/6k 并往串口打频点），代码在 git 历史里——那是唯一一次能
+> 直接把"喇叭能放出哪一段"量出来的手段。
+>
+> 下面的记录保留下来，因为**那几条踩过的坑和诊断顺序仍然成立**（尤其第 1、2 条）。
 
 拍照时播一声"咔"。**功能本身是好的，代码也是对的——问题是这颗喇叭放不出来。**
 
 ### 这里有什么
 
-| 文件 | 是什么 |
+| 文件 | 现在在哪 |
 | --- | --- |
-| `main_ui/shutter_sound.c` / `.h` | 曾经编进固件的裸 PCM（16kHz / 16bit / 立体声，250ms，15988 字节） |
-| `tools/gen_shutter_sound.py` | 从素材生成上面那个文件的脚本（WAV → 裸 PCM） |
-| `tools/preview_shutter_body.py` | 生成几档不同"低中频强度"的试听文件，调音色用 |
-| `tools/check_shutter_sound.py` | 把源素材和固件里的 PCM 分别导成 WAV，用来在电脑上对比试听 |
-| `assets/quick-camera-click.mp3` | **原始素材**（用户最早给的那份） |
-| `assets/quick-camera-click.pcm` | 16000 Hz / 16bit / 单声道 / 2525 帧 的裸 PCM，用户自己重采样的版本 |
-| `assets/shutter-body-*.wav` | `preview_shutter_body.py` 生成的试听文件 |
+| `main_ui/shutter_sound.c` / `.h` | 当初编进固件的裸 PCM（16kHz / 16bit / 立体声，250ms，15988 字节）。**已由 `main/app/shutter_sound.c` + `shutter_sound.h` 取代** |
+| `tools/gen_shutter_sound.py` | 生成上面那个文件的脚本。**已重写并搬回 `tools/`**（现在一次生成三个候选，输入是 mp3、靠 ffmpeg 解） |
+| `tools/check_shutter_sound.py` | 把源素材和固件里的 PCM 分别导成 WAV，在电脑上对比试听。**留在本目录**（新流程用不着了，见下） |
+| `tools/preview_shutter_body.py` | 生成几档不同"低中频强度"的试听文件，调音色用。**留在本目录** |
+| `assets/shutter-body-*.wav` | 上面那个脚本生成的试听文件。**留在本目录** |
 
-这些素材**全部集中在本目录**，`assets/` 里现在只剩启动页那张 `logo.jpg`。
+**旧素材 `quick-camera-click.mp3` / `.pcm` 已由用户删除**（2026-09-22 换成
+`assets/clear-camera-shutter-sound.mp3`）。换素材这件事本身没能解决问题，原因见工程
+README——**新素材比旧素材更偏高频**，所以如果旧的是因为放不出来才听不见，换了这个只会更糟。
+
+新流程不用 `preview_shutter_body.py` 那套"先在电脑上试听几档再挑"了：三个候选直接编进
+固件，在板子上点着听——**试听的对象从"电脑音箱"变成了"这颗喇叭本身"**，而当初的结论
+恰恰就是"电脑上听着正常、板子上听不见"。那两个脚本留着是因为它们记录的频段分析仍然有效。
 
 ### 为什么移除
 

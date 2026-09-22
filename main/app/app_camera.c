@@ -54,6 +54,9 @@ static void                 *s_frame_user = NULL;
 static uint16_t *s_preview_buf[2] = { NULL, NULL };
 static int       s_preview_idx = 0;          /* 当前交给界面的那块 */
 
+/* 用户选的特效。相机关着的时候也得记住，见 app_camera_start() 里的补写 */
+static app_camera_effect_t s_effect = APP_CAM_EFFECT_NORMAL;
+
 /*---------------------------------------------------------------------------
  * VGA -> QVGA：2x2 抽取
  *
@@ -204,6 +207,46 @@ static void preview_task(void *arg)
 }
 
 /*---------------------------------------------------------------------------
+ * 特效
+ *-------------------------------------------------------------------------*/
+static esp_err_t apply_effect(void)
+{
+    sensor_t *s = esp_camera_sensor_get();
+    if (s == NULL) {
+        return ESP_ERR_INVALID_STATE;   /* 相机没初始化 */
+    }
+    if (s->set_special_effect == NULL) {
+        /* esp32-camera 的传感器结构体里这一项是函数指针，没实现的就是 NULL。
+         * 换成别的传感器型号时可能整个没有，那时要退到软件变换 */
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return s->set_special_effect(s, (int)s_effect) == 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t app_camera_set_effect(app_camera_effect_t effect)
+{
+    if (effect != APP_CAM_EFFECT_NORMAL &&
+        effect != APP_CAM_EFFECT_NEGATIVE &&
+        effect != APP_CAM_EFFECT_GRAYSCALE) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_effect = effect;
+    if (!s_running) {
+        return ESP_OK;                  /* 记下来，start 时补写 */
+    }
+    esp_err_t err = apply_effect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "set effect %d failed: %s", (int)effect, esp_err_to_name(err));
+    }
+    return err;
+}
+
+app_camera_effect_t app_camera_get_effect(void)
+{
+    return s_effect;
+}
+
+/*---------------------------------------------------------------------------
  * 对外接口
  *-------------------------------------------------------------------------*/
 esp_err_t app_camera_start(void)
@@ -248,6 +291,21 @@ esp_err_t app_camera_start(void)
     esp_err_t err = bsp_camera_init();
     if (err != ESP_OK) {
         return err;
+    }
+
+    /*
+     * bsp_camera_init() 每次都会把传感器整套寄存器重写一遍，特效寄存器
+     * （0x23）跟着回到 Normal。所以**每次起预览都要把用户选的那一档补回去**，
+     * 否则"退出取景页再进来，滤镜就没了"。
+     *
+     * 只在非 Normal 时才写：Normal 是传感器的上电默认值，刚 init 完已经是它。
+     */
+    if (s_effect != APP_CAM_EFFECT_NORMAL) {
+        esp_err_t eerr = apply_effect();
+        if (eerr != ESP_OK) {
+            ESP_LOGW(TAG, "effect %d lost after re-init: %s",
+                     (int)s_effect, esp_err_to_name(eerr));
+        }
     }
 
     s_running = true;

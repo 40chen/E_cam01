@@ -21,6 +21,31 @@
 typedef void (*app_camera_frame_cb_t)(const uint8_t *rgb565, uint32_t width,
                                       uint32_t height, void *user);
 
+/*
+ * 画面特效。**走传感器寄存器（GC0308 的 0x23），不是改预览的那些像素**：
+ * 预览和存下来的照片是同一颗传感器出的，改寄存器两边一起变，不用在
+ * downscale_half() 和拍照两条路上各写一份像素变换。
+ *
+ * 取值**直接就是** esp32-camera 的 effect 编号（见 gc0308.c 的
+ * set_special_effect），中间不再加一层映射表——多一层映射就多一处会写错。
+ */
+typedef enum {
+    APP_CAM_EFFECT_NORMAL    = 0,
+    APP_CAM_EFFECT_NEGATIVE  = 1,   /* 负片 */
+    APP_CAM_EFFECT_GRAYSCALE = 2,   /* 黑白 */
+} app_camera_effect_t;
+
+/*
+ * 设置特效。相机没在跑（不在取景页）时只把值记下来，下次 app_camera_start()
+ * 会补上——bsp_camera_init() 每次都把传感器重新配一遍，特效寄存器会跟着
+ * 回到默认值，不补就会变成"进去看一眼滤镜没了"。
+ * 传感器不认这个值时返回 ESP_ERR_NOT_SUPPORTED，界面据此提示。
+ */
+esp_err_t app_camera_set_effect(app_camera_effect_t effect);
+
+/* 当前特效（界面重建时用它恢复按钮的选中态） */
+app_camera_effect_t app_camera_get_effect(void);
+
 /* 初始化摄像头并启动取帧任务。失败返回错误，界面应显示"相机不可用"。 */
 esp_err_t app_camera_start(void);
 

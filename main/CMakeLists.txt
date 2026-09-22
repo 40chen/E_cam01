@@ -8,6 +8,9 @@ idf_component_register(
         "app/app_mail.c"
         "app/app_audio.c"
         "app/app_usbmsc.c"
+        "app/app_sound.c"
+        "app/shutter_sound.c"
+        "app/app_pcmon.c"
         "ui/ui.c"
         "ui/splash_logo.c"
         "ui/font_cjk_20.c"
@@ -20,6 +23,9 @@ idf_component_register(
         "ui/page_photos.c"
         "ui/page_music.c"
         "ui/page_settings.c"
+        "ui/page_workmode.c"
+        "ui/page_modules.c"
+        "ui/page_pcmon.c"
     INCLUDE_DIRS
         "."
         "app"
@@ -28,6 +34,9 @@ idf_component_register(
         lckfb_bsp
         driver
         esp_timer
+        ## 副屏要解上位机推过来的 JSON。cJSON 是 IDF 自带的（components/json），
+        ## 不是托管组件，不用改 idf_component.yml
+        json
         nvs_flash
         esp_wifi
         esp_netif
