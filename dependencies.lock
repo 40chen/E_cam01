@@ -101,6 +101,13 @@ dependencies:
     - esp32h4
     - esp32s31
     version: 2.3.0
+  espressif/qrcode:
+    component_hash: 31e70991ce22f28d73a4386417fc9c0993f61e1aab1832474fd9e3db8da9dcbd
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.0
   espressif/tinyusb:
     component_hash: 16c8d774dab1f484d3e0c0f61105624d2424bbae864efd19818baf7b451b41e7
     dependencies:
@@ -136,8 +143,9 @@ direct_dependencies:
 - espressif/esp_lcd_touch_ft5x06
 - espressif/esp_lvgl_port
 - espressif/esp_tinyusb
+- espressif/qrcode
 - idf
 - lvgl/lvgl
-manifest_hash: 7af25122226abb521c4cf41df7f3f53b39dd5326e5361d0be10146d30452b2af
+manifest_hash: ea6012a3448a1ec29fcdc09627ecb22dec9f8e87599be0999364949919857236
 target: esp32s3
 version: 2.0.0

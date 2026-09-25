@@ -403,6 +403,66 @@ esp_err_t bsp_lvgl_start(void)
     return ESP_OK;
 }
 
+/* 当前是不是翻着的。面板上电时是 (mirror_x=true, mirror_y=false)，
+ * "翻过来"就是把它取反——MX/MY 同时反 = 旋转 180° */
+static bool s_flipped = false;
+
+esp_err_t bsp_lvgl_set_flip(bool upside_down)
+{
+    ESP_RETURN_ON_FALSE(s_panel_handle != NULL, ESP_ERR_INVALID_STATE, TAG,
+                        "display not initialized");
+    ESP_RETURN_ON_FALSE(s_lvgl_disp != NULL, ESP_ERR_INVALID_STATE, TAG,
+                        "call bsp_lvgl_start() first");
+    if (upside_down == s_flipped) {
+        return ESP_OK;              /* 幂等：每 200ms 轮询一次，别每次都翻 */
+    }
+
+    if (!lvgl_port_lock(0)) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /*
+     * 面板：走 LVGL 的旋转接口，**不要直接调 esp_lcd_panel_mirror()**。
+     *
+     * MADCTL 管的是"写进来的像素落到 GRAM 的哪个地址"，不是"屏幕上怎么扫"。
+     * 所以只翻 MX/MY 的话，**已经显示着的这一屏一个像素都不会动**——必须让
+     * LVGL 把整屏重画一遍，新写进去的像素才会按新的映射落位。只改寄存器不
+     * 重画，看上去就是"翻转没生效"。
+     *
+     * lv_disp_set_rotation() → lv_disp_drv_update() 正好把两件事一起做了，
+     * 结尾依次是：整屏失效 + 全树 layout 失效 + drv_update_cb。而
+     * esp_lvgl_port 的 drv_update_cb 按 disp_cfg.rotation（= swap_xy/mirror_x
+     * /mirror_y = true/true/false，和 lcd_panel_init() 里写死的那组一致）算出
+     * ROT_180 的镜像位 = (!true, !false) = (false, true)，正是我们要的 180°。
+     *
+     * 另外：LVGL 只在 sw_rotate 置位时才做软件旋转，而 esp_lvgl_port 从不设它，
+     * 所以这里的 rotated 标志**只**驱动 MADCTL，画布依旧是 320x240，没有额外
+     * 的每帧重绘开销。
+     */
+    lv_disp_set_rotation(s_lvgl_disp, upside_down ? LV_DISP_ROT_180 : LV_DISP_ROT_NONE);
+
+    /*
+     * 触摸：FT6336 是**另一颗芯片**，面板翻它不会跟着翻，得单独告诉它，
+     * 否则画面对着、手指却按在镜像的位置上。
+     * 它的初值和面板一致（swap_xy=1, mirror_x=1, mirror_y=0），所以加同样的
+     * 180° 就行——两边永远同步，这正是"改一个必须改另一个"的地方。
+     *
+     * 这里不能指望 esp_lvgl_port 代劳：它的触摸读回调只看得到
+     * esp_lcd_touch_get_coordinates() 的结果，完全不看 driver->rotated
+     * （只有 USB HID 鼠标那条路会自己按 rotated 换算）。
+     */
+    if (s_touch_handle != NULL) {
+        esp_lcd_touch_set_mirror_x(s_touch_handle, !upside_down);
+        esp_lcd_touch_set_mirror_y(s_touch_handle, upside_down);
+    }
+
+    lvgl_port_unlock();
+
+    s_flipped = upside_down;
+    ESP_LOGI(TAG, "画面%s", upside_down ? "翻转 180°" : "恢复正立");
+    return ESP_OK;
+}
+
 /*==============================================================================
  * TF 卡
  *============================================================================*/

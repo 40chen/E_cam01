@@ -8,8 +8,10 @@
  * 用 lv_async_call 转回 LVGL 上下文。回调是在解码任务里执行的，别在里面
  * 直接碰控件，也别在里面干慢活（那会把声音拖断）。
  *
- * 与相机的互斥（工程约定）：两者不能同时跑。界面层负责在进音乐页之前确保
- * 相机页已经销毁；离开音乐页时调 app_audio_stop()。
+ * 与相机的互斥（工程约定）：两者不能同时跑，它们抢内部 DMA RAM。
+ * **落点在这一版挪了**：以前是"离开音乐页就停播"，现在音乐算"模式"——
+ * 离开音乐页不停（频谱灯还要拿它当输入，见 page_music.c 的 maybe_stop_audio），
+ * 改由**相机页**在进页时调 app_audio_stop()。U 盘模式本来就会停。
  *
  * 采样率：卡里的 MP3 采样率各不相同（44.1k / 48k / 22.05k / 16k…），
  * 播放时按文件自己的采样率切 I2S 时钟，见 bsp_audio_set_fs()。
@@ -17,6 +19,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -46,6 +49,21 @@ esp_err_t app_audio_init(void);
 
 /* 注册状态回调（传 NULL 注销）。界面 destroy 时要先注销再 stop。 */
 void app_audio_set_event_cb(app_audio_event_cb_t cb, void *user);
+
+/*
+ * PCM 抽头：每解码出一帧，在送去 I2S **之前**原样回调一次。
+ * 给 WS2812 频谱灯用（app_led2812），别的地方不需要。
+ *
+ * 格式：交织的 16 位立体声；frames 是**帧**数（样本数是 frames*2）。
+ * rate_hz 是这一首自己的采样率——卡里的歌 44.1k/48k/22.05k/16k 都有，
+ * 做频率分析必须知道当前是多少，不要假定 44.1k。
+ *
+ * **在解码任务上下文里执行，必须立刻返回，绝不能阻塞**——在这里卡一下，
+ * 声音就跟着断一下。想干重活先拷进自己的缓冲，交给别的任务去做。
+ */
+typedef void (*app_audio_pcm_cb_t)(const int16_t *pcm, size_t frames,
+                                   uint32_t rate_hz, void *user);
+void app_audio_set_pcm_cb(app_audio_pcm_cb_t cb, void *user);
 
 /*
  * 扫描 dir（传 NULL 用 APP_MUSIC_DIR）下的 .mp3（后缀大小写不敏感），

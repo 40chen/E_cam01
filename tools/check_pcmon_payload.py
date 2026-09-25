@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""核对上位机发出去的 JSON 和固件读的字段对不对得上。
+r"""核对上位机发出去的 JSON 和固件读的字段对不对得上。
 
 为什么需要这个：这两边是靠**字段名**耦合的，而且耦合失败时两边都不报错——
 上位机照常写串口，板子照常收，只是屏幕上一片 "--"。这种错最难发现，
@@ -11,6 +11,10 @@
 
 用法：
     python tools/check_pcmon_payload.py
+    ECAM_DISPLAY_DIR="...\host control\Ecam_display" python tools/check_pcmon_payload.py
+
+上位机现在在固件仓库外面（../host control/Ecam_display），默认按那个相对路径找，
+找不到会用 ECAM_DISPLAY_DIR 覆盖——它和固件不是一个仓库，路径迟早还会动。
 
 需要 pyserial / psutil（上位机本来就要装），以及一个能建 Tk 根窗口的环境
 （上位机本身也是 Tk 程序）。建不了窗口时会直接跳过，不算失败。
@@ -25,8 +29,19 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP = os.path.join(ROOT, "assets", "Ecam_display")
 SRC = os.path.join(ROOT, "main", "app", "app_pcmon.c")
+
+'''
+上位机 2026-09-23 搬出了固件仓库：assets/Ecam_display/ -> host control/Ecam_display/
+（同目录下还新分了 ESP32C2_tank/ 和功能模块文件夹）。它现在和固件不是一个仓库，
+位置以后还会动，所以给一个环境变量出口：
+
+    ECAM_DISPLAY_DIR="D:/somewhere/Ecam_display" python tools/check_pcmon_payload.py
+'''
+APP = os.environ.get(
+    "ECAM_DISPLAY_DIR",
+    os.path.normpath(os.path.join(ROOT, os.pardir, "host control", "Ecam_display")),
+)
 
 sys.path.insert(0, APP)
 
@@ -141,7 +156,19 @@ def firmware_fields():
 
 
 def main():
-    print("跑一遍上位机：开始 -> 停止 -> 再开始 ...")
+    '''
+    上位机目录找不到要**报错**，不能跟着 Tk 那套"建不了窗口就跳过、不算失败"一起
+    滑过去：那会变成一个假绿——脚本什么都没查，却打印了成功。这正是本脚本存在的
+    意义（"两边都不报错"的耦合失败）反过来咬自己一口的样子。
+    '''
+    if not os.path.isdir(APP):
+        print("**失败**：上位机目录不存在：%s" % APP)
+        print("它 2026-09-23 搬到了固件仓库外面。用环境变量指过去：")
+        print('    ECAM_DISPLAY_DIR="...\\host control\\Ecam_display" %s'
+              % os.path.basename(__file__))
+        return 1
+
+    print("跑一遍上位机：开始 -> 停止 -> 再开始 ...（%s）" % APP)
     try:
         payload, sess, dialogs = run_session()
     except Exception as e:              # noqa: BLE001 —— 建不了 Tk 之类的

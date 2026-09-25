@@ -40,7 +40,14 @@ const char *app_settings_mail_to(void);
 bool app_settings_has_wifi(void);   /* SSID 非空 */
 bool app_settings_has_mail(void);   /* 发件地址非空 */
 
+/*
+ * 自动翻转（QMI8658 判方向，倒过来画面翻 180°）。**默认开**，
+ * 见 .c 里为什么"默认"不能靠缓冲区的初值。
+ */
+bool app_settings_auto_rotate(void);
+
 /* ---- setter：立即写 NVS 并 commit ---- */
+esp_err_t app_settings_set_auto_rotate(bool on);
 esp_err_t app_settings_set_wifi_ssid(const char *val);
 esp_err_t app_settings_set_wifi_pass(const char *val);
 esp_err_t app_settings_set_smtp_host(const char *val);

@@ -22,6 +22,8 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "app_imu.h"
+#include "app_module.h"
 #include "app_settings.h"
 #include "app_storage.h"
 #include "app_wifi.h"
@@ -52,6 +54,13 @@ static bool nvs_init(void)
 
 void app_main(void)
 {
+    /*
+     * **最先打的一行**：它出不来就说明 app_main 根本没被调用（或者日志
+     * 在这之前就断了），那和"app_main 里某一步卡住"是两码事。
+     * 2026-09-25 排查"启动日志到 esp_psram 那行就没了"时加的哨兵。
+     */
+    ESP_LOGI(TAG, "app_main entered");
+
     /* 时区设成北京时间。app_camera.c 用 localtime_r 生成照片文件名，
      * 不设时区的话 SNTP 对完时文件名也是 UTC，差 8 小时。 */
     setenv("TZ", "CST-8", 1);
@@ -87,6 +96,12 @@ void app_main(void)
                  esp_err_to_name(err));
     }
 
+    /* ---- 模块口：把 GPIO10/11 停到"输入 + 上拉"的空闲态 ----
+     * 放在这么早是有意的：这两根脚在别处没人管，越早摆到确定状态越好
+     * （悬空的输入线既费电、也容易被外设当成有效电平）。
+     * 型号是人在 Modules 页上点的，这里不做任何检测，见 app_module.h */
+    app_module_init();
+
     /* ---- 屏幕 + 背光：尽早点亮，作为后续一切判断的基准 ---- */
     err = bsp_display_init();
     if (err != ESP_OK) {
@@ -109,6 +124,15 @@ void app_main(void)
     if (serr != ESP_OK) {
         ESP_LOGW(TAG, "settings init failed: %s (fields will read as empty)",
                  esp_err_to_name(serr));
+    }
+
+    /* ---- 姿态传感器：只在"自动翻转"用得着，失败不致命 ----
+     * 放在 settings 之后：开关的持久值从 NVS 读（默认开），拿到之后才决定
+     * 要不要真的翻。自检的输出就是这块硬件的诊断报告，见 app_imu.c */
+    if (app_imu_init() == ESP_OK) {
+        app_imu_set_enabled(app_settings_auto_rotate());
+    } else {
+        ESP_LOGW(TAG, "QMI8658 不可用，自动翻转关闭（别的功能不受影响）");
     }
     serr = app_wifi_init();
     if (serr != ESP_OK) {

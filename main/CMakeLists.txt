@@ -11,6 +11,10 @@ idf_component_register(
         "app/app_sound.c"
         "app/shutter_sound.c"
         "app/app_pcmon.c"
+        "app/app_module.c"
+        "app/app_led2812.c"
+        "app/app_tank.c"
+        "app/app_imu.c"
         "ui/ui.c"
         "ui/splash_logo.c"
         "ui/font_cjk_20.c"
@@ -25,6 +29,8 @@ idf_component_register(
         "ui/page_settings.c"
         "ui/page_workmode.c"
         "ui/page_modules.c"
+        "ui/page_mod_led.c"
+        "ui/page_mod_tank.c"
         "ui/page_pcmon.c"
     INCLUDE_DIRS
         "."
@@ -44,4 +50,6 @@ idf_component_register(
         esp-tls
         mbedtls
         espressif__esp_jpeg
+        ## 履带车页上的二维码（见 idf_component.yml）
+        espressif__qrcode
 )

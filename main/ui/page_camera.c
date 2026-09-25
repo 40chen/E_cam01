@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "app_audio.h"
 #include "app_camera.h"
 #include "app_sound.h"
 #include "app_storage.h"
@@ -450,6 +451,18 @@ lv_obj_t *page_camera_create(lv_obj_t *parent)
         }
     } else {
         ESP_LOGW(TAG, "boot button unavailable, touch shutter only");
+    }
+
+    /*
+     * 相机的入口就是音乐出口的守卫。
+     *
+     * 音乐现在是**模式**不是页面：离开音乐页不再停播（那是为了频谱灯，
+     * 见 page_music.c），所以"相机和 MP3 不能同时跑"这条规矩的落点挪到了
+     * 这里——两者抢内部 DMA RAM，是真会出问题的，不是风格问题。
+     */
+    if (app_audio_state() != APP_AUDIO_IDLE) {
+        ESP_LOGW(TAG, "音乐还在放，先停掉（相机与 MP3 不能同时工作）");
+        app_audio_stop();
     }
 
     /* 启动预览 */

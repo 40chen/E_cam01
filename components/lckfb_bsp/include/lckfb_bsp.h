@@ -131,6 +131,24 @@ esp_err_t bsp_lvgl_start(void);
 /* 取 LVGL 显示对象（bsp_lvgl_start 之后有效） */
 void *bsp_display_get_lvgl_disp(void);
 
+/*
+ * 把整幅画面翻 180°（设备倒过来时用，见 app_imu）。
+ *
+ * **只动面板的 MADCTL 和触摸芯片的镜像位，LVGL 画布仍然是 320x240**，
+ * 所以六个页面一行都不用改——这正是只做 0/180 而不做 90/270 的原因：
+ * 后者会把画布变成 240x320，主菜单 94px 的格子、副屏 130/166 的栏宽、
+ * 相册三列全是按 320 宽算死的。
+ *
+ * 走的是 lv_disp_set_rotation()，不是直接写面板寄存器：MADCTL 只改"写进来
+ * 的像素落到 GRAM 的哪儿"，不改扫描输出，所以光翻 MADCTL 已经显示着的这一屏
+ * 不会动，必须同时整屏重画一次——这件事由 lv_disp_drv_update() 结尾的
+ * lv_obj_invalidate() 做掉。理由见实现处。
+ *
+ * 内部会自己取 LVGL 锁（递归锁，在 LVGL 任务里调也安全），所以从任何上下文
+ * 调都可以；翻转要等下一帧 LVGL 重画才看得见。
+ */
+esp_err_t bsp_lvgl_set_flip(bool upside_down);
+
 /*==============================================================================
  * 按键（Boot 键）
  * 原理图 SCH_ESP32-S3-V1_0_1：IO0_BOOT 接按键 SW1，另一端接地，低电平有效，

@@ -6,6 +6,7 @@
 #include "esp_lvgl_port.h"
 #include "lckfb_bsp.h"
 
+#include "app_imu.h"
 #include "splash_logo.h"
 #include "ui_theme.h"
 
@@ -22,6 +23,19 @@ static ui_page_id_t s_current_id = UI_PAGE_COUNT;
 
 static void switch_page_locked(ui_page_id_t page);
 
+/* 自动翻转（QMI8658 判方向）。全局一个定时器，不随页面走，见 ui_init */
+static lv_timer_t *s_rotate_timer;
+
+static void rotate_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    /* 面板的 MADCTL 和触摸的镜像位都要改（bsp_lvgl_set_flip 里一起做了）。
+     * 放在 lv_timer 里是为了跟着 LVGL 的节拍走——翻转靠的是"让 LVGL 整屏重画
+     * 一遍"，而这一拍恰好就在 lv_timer_handler 里。锁由 bsp_lvgl_set_flip 自己
+     * 取（递归锁），所以这里不需要再包一层。 */
+    bsp_lvgl_set_flip(app_imu_upside_down());
+}
+
 static const page_desc_t s_pages[UI_PAGE_COUNT] = {
     [UI_PAGE_HOME]     = { page_home_create,     page_home_destroy },
     [UI_PAGE_CAMERA]   = { page_camera_create,   page_camera_destroy },
@@ -30,6 +44,8 @@ static const page_desc_t s_pages[UI_PAGE_COUNT] = {
     [UI_PAGE_SETTINGS] = { page_settings_create, page_settings_destroy },
     [UI_PAGE_WORKMODE] = { page_workmode_create, page_workmode_destroy },
     [UI_PAGE_MODULES]  = { page_modules_create,  page_modules_destroy  },
+    [UI_PAGE_MOD_LED]  = { page_mod_led_create,  page_mod_led_destroy  },
+    [UI_PAGE_MOD_TANK] = { page_mod_tank_create, page_mod_tank_destroy },
     [UI_PAGE_PCMON]    = { page_pcmon_create,    page_pcmon_destroy    },
 };
 
@@ -177,6 +193,8 @@ void ui_open_music(void)    { ui_goto_async(UI_PAGE_MUSIC); }
 void ui_open_settings(void) { ui_goto_async(UI_PAGE_SETTINGS); }
 void ui_open_workmode(void) { ui_goto_async(UI_PAGE_WORKMODE); }
 void ui_open_modules(void)  { ui_goto_async(UI_PAGE_MODULES); }
+void ui_open_mod_led(void)  { ui_goto_async(UI_PAGE_MOD_LED); }
+void ui_open_mod_tank(void) { ui_goto_async(UI_PAGE_MOD_TANK); }
 void ui_open_pcmon(void)    { ui_goto_async(UI_PAGE_PCMON); }
 
 /*---------------------------------------------------------------------------
@@ -197,6 +215,10 @@ esp_err_t ui_init(void)
     /* 先出启动页，SPLASH_HOLD_MS 之后由定时器切主菜单。这段时间正好用来
      * 挂 TF 卡（见 app_main 的顺序），主菜单出现时状态栏就是准的。 */
     splash_show_locked();
+    /* 自动翻转的轮询：**放在这里而不是某个页面里**——它管的是整幅画面，
+     * 而页面会被销毁重建（主菜单、相册、音乐…每个都在的时候都得有效）。
+     * 200ms 一拍：方向本来变得就慢，bsp_lvgl_set_flip 又是幂等的 */
+    s_rotate_timer = lv_timer_create(rotate_timer_cb, 200, NULL);
     lvgl_port_unlock();
 
     ESP_LOGI(TAG, "UI ready (splash)");

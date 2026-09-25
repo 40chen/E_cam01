@@ -13,11 +13,17 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # ---- PSRAM: N16R8 is octal PSRAM, so OCT + 80MHz, flash in DIO ----
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_SPEED_40M=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# 2026-09-25: 80M to 40M. The board started crashing in esp_psram_init at every
+# boot, cold start included. The faulting PC is in IROM (code fetched from flash)
+# and EXCVADDR is 0 -- a NULL dereference. If a flash read goes bad it comes back
+# as zeros, and dereferencing that is exactly NULL; the PSRAM is not even mapped
+# yet at that point. Lowering the clock is the cheapest mitigation for a marginal
+# flash. Once it is stable, try 80M again to find out which side is marginal.
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 
 # ---- CPU / cache ----
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

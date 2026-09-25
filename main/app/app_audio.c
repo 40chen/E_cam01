@@ -94,6 +94,8 @@ static QueueHandle_t        s_cmd_q;
 static TaskHandle_t         s_task;
 static app_audio_event_cb_t s_event_cb;
 static void                *s_event_user;
+static app_audio_pcm_cb_t   s_pcm_cb;       /* 频谱灯的抽头，见 app_audio.h */
+static void                *s_pcm_user;
 
 static char s_names[APP_AUDIO_MAX_TRACKS][APP_AUDIO_NAME_LEN];
 static int  s_track_count;
@@ -614,6 +616,18 @@ static bool play_file(int index, int *next_out)
             mono_to_stereo(s_pcm, frames);  /* ES8311 这条通路只吃立体声 */
             bytes *= 2;
         }
+        /*
+         * 频谱灯的抽头：**送 I2S 之前**把这一帧原样让出去一份。
+         * 挂在写之前而不是之后，是因为 write_pcm 会阻塞到 DMA 收下数据
+         * （一首歌放完时更明显），挂后面的话灯会跟着声音一起卡。
+         *
+         * 回调必须立刻返回：app_led2812 那边只做一次拷贝进环形缓冲，
+         * 真正的分析跑在它自己的任务里（见 app_led2812.c）。
+         */
+        if (s_pcm_cb != NULL) {
+            s_pcm_cb(s_pcm, (size_t)frames, s_rate, s_pcm_user);
+        }
+
         const int64_t t_write = esp_timer_get_time();
         if (write_pcm(s_pcm, bytes) != ESP_OK) {
             ESP_LOGE(TAG, "I2S 写入失败");
@@ -760,6 +774,12 @@ void app_audio_set_event_cb(app_audio_event_cb_t cb, void *user)
 {
     s_event_cb = cb;
     s_event_user = user;
+}
+
+void app_audio_set_pcm_cb(app_audio_pcm_cb_t cb, void *user)
+{
+    s_pcm_cb = cb;
+    s_pcm_user = user;
 }
 
 esp_err_t app_audio_play_index(int index)

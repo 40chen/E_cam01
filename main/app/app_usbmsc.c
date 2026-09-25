@@ -19,6 +19,7 @@
 
 #include "app_audio.h"
 #include "app_camera.h"
+#include "app_module.h"
 #include "app_storage.h"
 #include "lckfb_bsp.h"
 
@@ -83,6 +84,18 @@ esp_err_t app_usbmsc_enter(void)
     /* 1. 先停掉吃卡的东西。相机和音频本来就互斥，这里两个都停 */
     app_camera_stop();
     app_audio_stop();
+
+    /*
+     * 履带车也停。它并不吃 TF 卡，但**此时屏幕已经不在控制页上了**：
+     * 用户在 U 盘模式里翻文件，而车还挂着一条链路在 20Hz 发指令。
+     * 车身看门狗 500ms 会停（没有新指令时），可"设备已经换了个形态、
+     * 车却还在听"这件事本身就不该存在——安全相关的东西宁可多停一次。
+     *
+     * 走 deselect 而不是 app_tank_disable()：后者只拆链路、不清选择，
+     * Modules 页上会留一个"Running"的假状态。deselect 两件事一起做。
+     * 氛围灯不停：它和卡、和这条路都不冲突，关掉只是白白打断用户。
+     */
+    app_module_deselect();
 
     /*
      * 2. 卸 FATFS —— 必须在把设备交给电脑**之前**做完。

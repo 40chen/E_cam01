@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 
 #include "app_audio.h"
+#include "app_imu.h"
 #include "app_mail.h"
 #include "app_settings.h"
 #include "app_sound.h"
@@ -330,6 +331,25 @@ static void row_testmail_cb(lv_event_t *e)
  *-------------------------------------------------------------------------*/
 static lv_obj_t *s_sw_shutter;
 static lv_obj_t *s_sl_vol;
+static lv_obj_t *s_sw_rotate;
+
+/* 定义在 refresh_status 那边（状态定时器附近），这里先用 */
+static void refresh_rotate_status(void);
+
+static void rotate_switch_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+
+    /* 立刻生效（翻转由 ui.c 那个 200ms 的定时器去设面板），再落盘：
+     * 这是个"填一次就不动"的偏好，掉电该还在 */
+    app_imu_set_enabled(on);
+    if (app_settings_set_auto_rotate(on) != ESP_OK) {
+        ui_toast_show("Could not save", UI_COLOR_DANGER);
+    }
+    /* 状态行跟着变：关掉时应该立刻显示 "Off"，而不是等下一拍定时器 */
+    refresh_rotate_status();
+}
 
 static void shutter_switch_cb(lv_event_t *e)
 {
@@ -537,12 +557,30 @@ static void refresh_status(void)
     }
 }
 
+/*
+ * 自动翻转那一行的状态：传感器在不在、开关开没开、当前判成正立还是倒置。
+ *
+ * **这是给"串口日志看不见"留的后路**——用户把设备翻过来，盯着这一行就能
+ * 判断功能到底有没有在工作，不用去翻串口。
+ */
+static void refresh_rotate_status(void)
+{
+    if (s_sw_rotate == NULL) {
+        return;
+    }
+    lv_obj_t *row = (lv_obj_t *)lv_obj_get_user_data(s_sw_rotate);
+    if (row != NULL) {
+        ui_list_row_set_value(row, app_imu_status_str());
+    }
+}
+
 static void refresh_storage(void);
 
 static void status_timer_cb(lv_timer_t *t)
 {
     (void)t;
     refresh_status();
+    refresh_rotate_status();
     /* 剩余空间也跟着刷：从 U 盘模式退回来之后，卡刚被电脑写过，
      * 不刷的话这里会一直显示进模式之前的旧值 */
     if (s_row_free != NULL) {
@@ -608,6 +646,20 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     /* 填完之后总得有个地方验证这套配置真能用 */
     s_row_testmail = add_row(content, "Send Test Email", "",
                              true, row_testmail_cb, NULL);
+
+    /* ---- Display ----
+     * 自动翻转。**放设置页而不是工作模式页**：它改的是显示偏好（填一次就
+     * 不动），不是"换一种工作方式"，而且它落盘、掉电还在——工作模式页那几项
+     * 是刻意不落盘的（见 page_workmode.c） */
+    add_section(content, "DISPLAY");
+    s_sw_rotate = add_switch_row(content, "Auto Rotate", rotate_switch_cb);
+    if (app_settings_auto_rotate()) {
+        lv_obj_add_state(s_sw_rotate, LV_STATE_CHECKED);
+    }
+    refresh_rotate_status();
+    ui_list_note_create(content,
+                        "Turn the device upside down and the picture follows.\n"
+                        "Uses the on-board accelerometer.");
 
     /* ---- Sound ----
      * 开关 + 音量两行，见上面那段注释（原来是三行测试工具） */

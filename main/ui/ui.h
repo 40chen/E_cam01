@@ -25,7 +25,9 @@ typedef enum {
     UI_PAGE_MUSIC,
     UI_PAGE_SETTINGS,
     UI_PAGE_WORKMODE,       /* 工作模式：会改变整机形态的开关 */
-    UI_PAGE_MODULES,        /* 外接模块：插在 GPIO10/11 上的外设 */
+    UI_PAGE_MODULES,        /* 外接模块：选模块的地方 */
+    UI_PAGE_MOD_LED,        /* 模块控制页：WS2812 氛围灯 */
+    UI_PAGE_MOD_TANK,       /* 模块控制页：履带车 */
     UI_PAGE_PCMON,          /* 副屏：上位机推过来的系统状态 */
     UI_PAGE_COUNT,
 } ui_page_id_t;
@@ -71,6 +73,12 @@ void      page_workmode_destroy(void);
 lv_obj_t *page_modules_create(lv_obj_t *parent);
 void      page_modules_destroy(void);
 
+lv_obj_t *page_mod_led_create(lv_obj_t *parent);
+void      page_mod_led_destroy(void);
+
+lv_obj_t *page_mod_tank_create(lv_obj_t *parent);
+void      page_mod_tank_destroy(void);
+
 lv_obj_t *page_pcmon_create(lv_obj_t *parent);
 void      page_pcmon_destroy(void);
 
@@ -80,6 +88,8 @@ void ui_open_music(void);
 void ui_open_settings(void);
 void ui_open_workmode(void);
 void ui_open_modules(void);
+void ui_open_mod_led(void);
+void ui_open_mod_tank(void);
 void ui_open_pcmon(void);
 
 #ifdef __cplusplus

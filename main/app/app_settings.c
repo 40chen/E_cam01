@@ -24,6 +24,12 @@ static char s_smtp_port[APP_SETTINGS_PORT_MAX + 1];
 static char s_mail_from[APP_SETTINGS_ADDR_MAX + 1];
 static char s_mail_pass[APP_SETTINGS_ADDR_MAX + 1];
 static char s_mail_to[APP_SETTINGS_ADDR_MAX + 1];
+/*
+ * 自动翻转（QMI8658 判方向）。**这是个开关而不是凭据**，但它是"填一次就不动"
+ * 的用户偏好，所以落盘——不像副屏/U 盘那种"跟模式不跟设置"的东西。
+ * 存成 "0"/"1" 是因为这张表里全是字符串，为它单开一个 nvs 类型不划算。
+ */
+static char s_auto_rotate[2] = "1";
 
 static const setting_slot_t s_slots[] = {
     { "wifi_ssid", s_wifi_ssid, sizeof(s_wifi_ssid) },
@@ -33,6 +39,7 @@ static const setting_slot_t s_slots[] = {
     { "mail_from", s_mail_from, sizeof(s_mail_from) },
     { "mail_pass", s_mail_pass, sizeof(s_mail_pass) },
     { "mail_to",   s_mail_to,   sizeof(s_mail_to)   },
+    { "auto_rot",  s_auto_rotate, sizeof(s_auto_rotate) },
 };
 
 static esp_err_t set_str(const char *key, char *ram, size_t size, const char *val)
@@ -116,7 +123,23 @@ const char *app_settings_mail_to(void)   { return s_mail_to; }
 bool app_settings_has_wifi(void) { return s_wifi_ssid[0] != '\0'; }
 bool app_settings_has_mail(void) { return s_mail_from[0] != '\0'; }
 
+bool app_settings_auto_rotate(void)
+{
+    /*
+     * **默认是开，但"开"不能靠 s_auto_rotate 的初值**：上面那个读循环对所有
+     * 槽位一视同仁，键不存在（全新设备）时会把缓冲清成空串，"1" 那个初值
+     * 早就没了。所以判据是"只有明确存过 0 才算关"——空串、"1"、任何别的
+     * 东西都当开。
+     */
+    return s_auto_rotate[0] != '0';
+}
+
 /* ---- setter ---- */
+esp_err_t app_settings_set_auto_rotate(bool on)
+{
+    return set_str("auto_rot", s_auto_rotate, sizeof(s_auto_rotate), on ? "1" : "0");
+}
+
 esp_err_t app_settings_set_wifi_ssid(const char *val)
 {
     return set_str("wifi_ssid", s_wifi_ssid, sizeof(s_wifi_ssid), val);

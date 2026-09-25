@@ -28,6 +28,7 @@
 
 #include "app_audio.h"
 #include "app_camera.h"
+#include "app_led2812.h"
 #include "app_mail.h"
 #include "app_storage.h"
 #include "lckfb_bsp.h"
@@ -35,6 +36,29 @@
 #include "ui_theme.h"
 
 static const char *TAG = "page_music";
+
+/*
+ * 离开音乐页时的停播，**只有频谱灯正拿音乐当输入时才留着放**。
+ *
+ * 原来这里是直接 app_audio_stop()（"离开音乐页就停播"）。加了氛围灯模块
+ * 之后那条规矩站不住了：屏幕同一时刻只有一个页面，进了 LED 页音乐就没了，
+ * 频谱灯永远收不到输入——所以音乐改成了"模式"（和副屏、和灯本身一样，
+ * 跟模式不跟页面）。
+ *
+ * 互斥本身没取消，只是落点挪了：**相机页和新进的 U 盘模式才是必须停播的
+ * 地方**（相机和 MP3 抢内部 DMA RAM，是真会出问题的），见 page_camera.c。
+ *
+ * 副作用：音乐停了（暂停、放完、被相机打断）PCM 就断，柱子自己衰减到全黑，
+ * 那边不需要任何额外处理。
+ */
+static void maybe_stop_audio(void)
+{
+    if (app_led2812_needs_audio()) {
+        ESP_LOGI(TAG, "频谱灯正拿它当输入，音乐继续放");
+        return;
+    }
+    app_audio_stop();
+}
 
 #define UI_REFRESH_MS   200         /* 进度/歌词刷新周期 */
 #define DISC_STEP_MS    60          /* 黑胶旋转周期 */
@@ -1177,7 +1201,7 @@ static void page_back_cb(lv_event_t *e)
     /* 返回键就是离开音乐页：先停播（关功放、释放解码器），再异步切页。
      * 切页必须走异步——回调执行期间把整个页面（含这个按钮）删掉在 LVGL
      * 里是未定义行为 */
-    app_audio_stop();
+    maybe_stop_audio();
     ui_go_home_async();
 }
 
@@ -1283,7 +1307,7 @@ void page_music_destroy(void)
     /* 顺序照 page_camera.c：先注销回调（解码任务随时可能回调进来），
      * 再停播放，最后清指针 */
     app_audio_set_event_cb(NULL, NULL);
-    app_audio_stop();
+    maybe_stop_audio();
     big_close();
 
     if (s_ui_timer != NULL) {
