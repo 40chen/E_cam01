@@ -74,3 +74,8 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # 512B default: measurably better throughput on a 1-bit SDMMC card.
 CONFIG_TINYUSB_MSC_ENABLED=y
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
+
+# NOTE: a vendor class (CONFIG_TINYUSB_VENDOR_COUNT) was briefly enabled here for
+# the "USB Display" mode (device as a PC monitor). That mode was removed on
+# 2026-09-26 because it needs a Windows IDD driver that would not start on the
+# target machines; see _removed/README.md. Left at 0 on purpose.

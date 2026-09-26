@@ -199,7 +199,7 @@ static void refresh(void)
          * 画面，但提示语要能指路 */
         lv_label_set_text(s_status, app_pcmon_is_running()
                           ? "Waiting for PC..."
-                          : "Secondary display is off");
+                          : "Status display is off");
         lv_obj_set_style_text_color(s_status, UI_COLOR_TEXT_SUB, 0);
         clear_all();
         return;

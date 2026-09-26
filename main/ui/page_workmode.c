@@ -5,12 +5,16 @@
  * 凭据和参数（填一次就不动），这里的每一项都会让设备换一种工作方式，
  * 用户找它们时想的是"切个模式"，不是"去设置里翻"。
  *
- *   USB Drive          把 TF 卡交给电脑当读卡器（原来挂在设置页 STORAGE 下）
- *   Secondary Display  收上位机推过来的状态，显示在副屏页上
+ *   USB Drive       把 TF 卡交给电脑当读卡器（原来挂在设置页 STORAGE 下）
+ *   Status Display  收上位机推过来的状态，显示在副屏页上
  *
- * **开关状态只存在内存里，掉电回到关**：副屏要上位机一直在那头跑着才有意义，
- * 开机自动把串口收起来、而对面根本没在发，只会让人以为功能坏了。
+ * **开关状态只存在内存里，掉电回到关**：Status Display 要上位机一直在那头跑着
+ * 才有意义，开机自动把串口收起来、而对面根本没在发，只会让人以为功能坏了。
  * （要持久化的话得给 app_settings 加键，目前还没做。）
+ *
+ * 曾经还有第三项 USB Display（把整机当电脑的一块显示器），2026-09-26 移除，
+ * 原因见 `_removed/README.md`——它要装一个 Windows IDD 驱动才能用，而那个驱动
+ * 在目标机器上根本起不来（代码 10），不适合产品定位。
  */
 #include "page_workmode.h"
 
@@ -44,7 +48,7 @@ static void pcmon_switch_cb(lv_event_t *e)
 
     if (!on) {
         app_pcmon_stop();
-        ui_toast_show("Secondary display off", lv_color_white());
+        ui_toast_show("Status display off", lv_color_white());
         return;
     }
 
@@ -64,7 +68,7 @@ static void row_pcstatus_cb(lv_event_t *e)
 {
     (void)e;
     if (!app_pcmon_is_running()) {
-        ui_toast_show("Turn on Secondary Display first", UI_COLOR_DANGER);
+        ui_toast_show("Turn on Status Display first", UI_COLOR_DANGER);
         return;
     }
     ui_open_pcmon();
@@ -86,9 +90,9 @@ lv_obj_t *page_workmode_create(lv_obj_t *parent)
                         "Hand the TF card over to your computer as a card reader.\n"
                         "This device cannot read it until you exit.");
 
-    /* Secondary Display：开关在右，行本身不响应点击——点行和点开关做同一件
+    /* Status Display：开关在右，行本身不响应点击——点行和点开关做同一件
      * 事的话，想拖动看列表的人会误触发 */
-    lv_obj_t *row = ui_list_row_create(content, "Secondary Display", "", false);
+    lv_obj_t *row = ui_list_row_create(content, "Status Display", "", false);
     s_sw_pcmon = lv_switch_create(row);
     lv_obj_set_size(s_sw_pcmon, 44, 22);
     lv_obj_align(s_sw_pcmon, LV_ALIGN_RIGHT_MID, 0, 0);
