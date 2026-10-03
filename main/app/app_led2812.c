@@ -74,16 +74,15 @@ static const char *TAG = "led2812";
  * 升是立刻跳上去（快升慢落），眼睛看着才有"跟着音乐跳"的感觉。 */
 #define LED_DECAY_PER_FRAME 3
 
-#define LED_FRAME_MS        33      /* 目标刷新周期，两个效果都按它配速 */
+#define LED_FRAME_MS        33      /* 目标刷新周期，效果帧都按它配速 */
+#define LED_TEST_STEP_MS    100     /* 灯珠排列测试每 100ms 前进一颗 */
 
 /* 音频环形缓冲。44.1kHz 下 4096 个单声道样本 ≈ 93ms，够放下一帧还有富余 */
 #define LED_RING_SAMPLES    4096
 
-/* 8x8 灯板的串行顺序。**这两个开关是猜的**：跑 README「外接模块」一节里
- * 那个 index 0/7/8/63 的点灯测试，四个角对不上就翻这两个布尔量
- * （四种组合穷举一遍必有对的）。 */
-#define LED_SERPENTINE      1       /* 行是蛇形走线（奇数行反向） */
-#define LED_ROW0_AT_TOP     1       /* 0 号灯在最上面一行（0 = 最下面） */
+/* 灯板按列顺序串接：每列都从底部向上编号，列与列之间不反向。 */
+#define LED_SERPENTINE      0
+#define LED_ROW0_AT_TOP     0       /* 第一列从底部开始 */
 
 /*---------------------------------------------------------------------------
  * 状态
@@ -97,6 +96,7 @@ static volatile uint8_t s_effect = APP_LED_EFFECT_MANUAL;
 static volatile uint8_t s_hue    = 160;     /* 默认偏青蓝，不刺眼 */
 static volatile uint8_t s_sat    = 255;
 static volatile uint8_t s_bright = 40;      /* 见 LED_MAX_MA 的说明 */
+static volatile uint8_t s_test_position;
 
 static uint8_t s_gamma[256];
 static uint8_t s_levels[LED_BANDS];         /* 界面读的快照，0~8 */
@@ -440,11 +440,11 @@ static void spectrum_analyze(const int16_t *mono, uint8_t *out)
 static int xy_to_index(int col, int row)
 {
     const int r = LED_ROW0_AT_TOP ? row : (LED_ROWS - 1 - row);
-    int c = col;
-    if (LED_SERPENTINE && (r & 1)) {
-        c = LED_COLS - 1 - c;
+    int mapped_row = r;
+    if (LED_SERPENTINE && (col & 1)) {
+        mapped_row = LED_ROWS - 1 - r;
     }
-    return r * LED_COLS + c;
+    return col * LED_ROWS + mapped_row;
 }
 
 static void render_manual(uint8_t *rgb)
@@ -463,16 +463,28 @@ static void render_spectrum(uint8_t *rgb)
     memset(rgb, 0, APP_LED_COUNT * 3);
     for (int c = 0; c < LED_BANDS; c++) {
         const int h = s_levels[c];
-        for (int row = 0; row < h && row < LED_ROWS; row++) {
+        for (int level = 0; level < h && level < LED_ROWS; level++) {
+            const int row = LED_ROWS - 1 - level;
             /* 低的那几行偏青、顶上的偏红，看着像条音量表 */
             uint8_t r, g, b;
-            hsv2rgb((uint8_t)(160 - row * 22), 255, 255, &r, &g, &b);
+            hsv2rgb((uint8_t)(160 - level * 22), 255, 255, &r, &g, &b);
             const int idx = xy_to_index(c, row);
             rgb[idx * 3 + 0] = r;
             rgb[idx * 3 + 1] = g;
             rgb[idx * 3 + 2] = b;
         }
     }
+}
+
+static void render_test(uint8_t *rgb)
+{
+    memset(rgb, 0, APP_LED_COUNT * 3);
+    uint8_t r, g, b;
+    hsv2rgb(s_hue, s_sat, 255, &r, &g, &b);
+    const int offset = s_test_position * 3;
+    rgb[offset + 0] = r;
+    rgb[offset + 1] = g;
+    rgb[offset + 2] = b;
 }
 
 /* 亮度 → gamma → 限流 → 发出去。三个效果的收尾都一样，统一在这里 */
@@ -502,9 +514,12 @@ static void led_task(void *arg)
     int16_t  mono[LED_FFT_N];
     uint8_t  target[LED_BANDS];
     TickType_t last = xTaskGetTickCount();
+    TickType_t test_last_step = 0;
 
     while (!s_stop) {
-        if (s_effect == APP_LED_EFFECT_SPECTRUM) {
+        const app_led_effect_t effect = (app_led_effect_t)s_effect;
+        if (effect == APP_LED_EFFECT_SPECTRUM) {
+            test_last_step = 0;
             ring_read(mono, LED_FFT_N);
 
             /* 采样率和频段表对不上就重建。放在这里而不是回调里：回调在
@@ -531,13 +546,23 @@ static void led_task(void *arg)
                 }
             }
             render_spectrum(rgb);
+        } else if (effect == APP_LED_EFFECT_TEST) {
+            const TickType_t now = xTaskGetTickCount();
+            if (test_last_step == 0) {
+                test_last_step = now;
+            } else if ((now - test_last_step) >= pdMS_TO_TICKS(LED_TEST_STEP_MS)) {
+                s_test_position = (s_test_position + 1) % APP_LED_COUNT;
+                test_last_step = now;
+            }
+            render_test(rgb);
         } else {
+            test_last_step = 0;
             render_manual(rgb);
         }
 
         push_frame(rgb);
 
-        /* 两个效果都按 33ms 配速。频谱这边**不能让 PCM 的到达速度决定刷新率**：
+        /* 效果帧都按 33ms 配速。频谱这边**不能让 PCM 的到达速度决定刷新率**：
          * 44.1kHz 下一帧 512 点只有 11.6ms，不拦着就会以 86fps 去刷 RMT，
          * 白烧 16% 的核 */
         vTaskDelayUntil(&last, pdMS_TO_TICKS(LED_FRAME_MS));
@@ -635,24 +660,36 @@ bool app_led2812_needs_audio(void)
 
 esp_err_t app_led2812_set_effect(app_led_effect_t effect)
 {
-    if (effect != APP_LED_EFFECT_MANUAL && effect != APP_LED_EFFECT_SPECTRUM) {
+    if (effect != APP_LED_EFFECT_MANUAL &&
+        effect != APP_LED_EFFECT_SPECTRUM &&
+        effect != APP_LED_EFFECT_TEST) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_task == NULL) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (effect == APP_LED_EFFECT_TEST && s_effect != APP_LED_EFFECT_TEST) {
+        s_test_position = 0;
     }
     s_effect = (uint8_t)effect;
     if (effect == APP_LED_EFFECT_MANUAL) {
         /* 切回手动时把柱子清掉，否则残留的高度会一直挂在快照里 */
         memset(s_levels, 0, sizeof(s_levels));
     }
-    ESP_LOGI(TAG, "效果切到 %s", effect == APP_LED_EFFECT_MANUAL ? "手动" : "频谱");
+    const char *name = effect == APP_LED_EFFECT_MANUAL ? "手动" :
+                       effect == APP_LED_EFFECT_SPECTRUM ? "频谱" : "灯珠测试";
+    ESP_LOGI(TAG, "效果切到 %s", name);
     return ESP_OK;
 }
 
 app_led_effect_t app_led2812_effect(void)
 {
     return (app_led_effect_t)s_effect;
+}
+
+uint8_t app_led2812_test_position(void)
+{
+    return s_test_position + 1;
 }
 
 esp_err_t app_led2812_set_hsv(uint8_t h, uint8_t s)

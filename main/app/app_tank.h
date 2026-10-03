@@ -23,7 +23,7 @@
  *   Ecam → C2   #wifi 2 <b64 PASS>
  *   Ecam → C2   #wifi 3             ← C2 到这一行才真的写 NVS
  *   C2 → Ecam   #wifi ok | #wifi err <code>
- *   C2 → Ecam   #ip <addr>          C2 拿到 IP 后报上来；之后每秒一条当心跳
+ *   C2 → Ecam   #ip <addr>          C2 拿到 IP 或收到 #hi 时报告；之后每秒一条当心跳
  *
  * 两边**共用同一个行解析器**（handle_line），UDP 那条路上收到的也是这些行，
  * 不需要第二套协议。

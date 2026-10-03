@@ -2,10 +2,11 @@
  * app_led2812.h — WS2812 氛围灯模块（外接模块之一）
  *
  * 驱动一块 8x8（64 颗）WS2812 灯板，DIN 接在模块口的 GPIO10 上（见 app_module.h）。
- * 两个效果**互斥**，同一时刻只有一个在跑：
+ * 三个效果**互斥**，同一时刻只有一个在跑：
  *
  *   MANUAL    手动氛围灯：整块板一个颜色，色轮选色 + 亮度滑条
  *   SPECTRUM  音乐频谱灯：8 列柱状，一列一个对数频段，高的一列是高频
+ *   TEST      灯珠排列测试：按 WS2812 串行顺序逐颗点亮并循环
  *
  * **频谱为什么不用麦克风**：板和喇叭在同一台设备上，放歌时麦克风听到的就是
  * 这把喇叭——音量和频率响应都是二手的，还容易啸叫。而解码后的 PCM 就在手边
@@ -35,6 +36,7 @@ extern "C" {
 typedef enum {
     APP_LED_EFFECT_MANUAL = 0,      /* 手动氛围灯 */
     APP_LED_EFFECT_SPECTRUM,        /* 音乐频谱灯 */
+    APP_LED_EFFECT_TEST,            /* 灯珠排列测试：按串行顺序逐颗点亮 */
 } app_led_effect_t;
 
 /*
@@ -61,9 +63,12 @@ bool app_led2812_is_active(void);
  */
 bool app_led2812_needs_audio(void);
 
-/* 两个效果互斥，直接切 */
+/* 效果互斥，直接切 */
 esp_err_t app_led2812_set_effect(app_led_effect_t effect);
 app_led_effect_t app_led2812_effect(void);
+
+/* 测试效果当前点亮的灯珠编号（1~APP_LED_COUNT） */
+uint8_t app_led2812_test_position(void);
 
 /* 手动氛围灯的颜色（h/s 都是 0~255，h 是色轮角度）与全局亮度（0~100） */
 esp_err_t app_led2812_set_hsv(uint8_t h, uint8_t s);

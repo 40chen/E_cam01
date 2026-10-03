@@ -116,7 +116,11 @@ static void handle_line(const char *line)
         /* 学到地址 = 从此可以走无线。车每秒还会再报一次当心跳，
          * 所以这里不用区分"第一次"和"又来了" */
         const bool first = (s_c2_ip[0] == '\0');
+        const bool changed = strcmp(s_c2_ip, line + 4) != 0;
         strlcpy(s_c2_ip, line + 4, sizeof(s_c2_ip));
+        if (changed) {
+            s_c2_addr.sin_addr.s_addr = 0;  /* 空地址或新 IP 都要重算 UDP 目标 */
+        }
         if (first && s_c2_ip[0] != '\0') {
             ESP_LOGI(TAG, "拿到车的地址 %s，之后的驱动走 UDP:%d",
                      s_c2_ip, APP_TANK_UDP_PORT);

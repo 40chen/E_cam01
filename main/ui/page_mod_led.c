@@ -1,10 +1,11 @@
 /*
  * page_mod_led.c — 模块控制页：WS2812 氛围灯
  *
- * 两个效果互斥，顶上两个按钮切：
+ * 三个效果互斥，顶上按钮切：
  *
  *   Manual    色轮选色 + 亮度滑条，整块板一个颜色
  *   Spectrum  8 根柱子跟着音乐跳，信号来自解码后的 PCM（见 app_led2812.h）
+ *   Test      按灯带串行顺序逐颗点亮，检查灯珠排列
  *
  * **离开这一页不会关灯**：设备和副屏一样跟的是"模式"不是"页面"。
  * 关掉要走右上角那个 Disable（它调的才是 app_module_deselect()）。
@@ -36,6 +37,7 @@ static const char *TAG = "page_mod_led";
  *       spectrum 8 根柱子（每根 28 宽，SPACE_BETWEEN 自动摊开）+ 播放行 28
  */
 #define BTN_H       30
+#define EFFECT_BTN_W 97
 #define CW_SIZE     94      /* 色轮 */
 #define SLIDER_W    20
 #define SLIDER_H    88
@@ -46,14 +48,17 @@ static const char *TAG = "page_mod_led";
 
 static lv_obj_t   *s_btn_manual;
 static lv_obj_t   *s_btn_spectrum;
+static lv_obj_t   *s_btn_test;
 static lv_obj_t   *s_panel_manual;
 static lv_obj_t   *s_panel_spectrum;
+static lv_obj_t   *s_panel_test;
 static lv_obj_t   *s_wheel;
 static lv_obj_t   *s_bright;
 static lv_obj_t   *s_bright_label;
 static lv_obj_t   *s_bars[BAR_NUM];
 static lv_obj_t   *s_track_label;
 static lv_obj_t   *s_play_label;
+static lv_obj_t   *s_test_position_label;
 static lv_timer_t *s_timer;
 
 /* 一张白卡片：两套控制面板都装在这里面，视觉上和工作模式页的列表一致 */
@@ -67,34 +72,30 @@ static lv_obj_t *panel_card(lv_obj_t *parent)
 }
 
 /*---------------------------------------------------------------------------
- * 两个效果的按钮状态
+ * 效果按钮状态
  *-------------------------------------------------------------------------*/
 static void effect_buttons_refresh(void)
 {
-    const bool spec = (app_led2812_effect() == APP_LED_EFFECT_SPECTRUM);
-    lv_obj_t *on  = spec ? s_btn_spectrum : s_btn_manual;
-    lv_obj_t *off = spec ? s_btn_manual : s_btn_spectrum;
-
-    /*
-     * 选中 = 强调色实心；没选中 = **和卡片一样的白底**（不是透明）。
-     * 透明的话没选中的那个会直接坐在页面灰底上，看着像"不可用"；
-     * 白底才读得出"它也是个能点的卡片，只是现在没选它"。
-     */
-    lv_obj_set_style_bg_color(on, UI_COLOR_ACCENT, 0);
-    lv_obj_set_style_bg_opa(on, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(on, 0), lv_color_white(), 0);
-
-    lv_obj_set_style_bg_color(off, UI_COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(off, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(off, 0), UI_COLOR_TEXT, 0);
-
-    if (spec) {
-        lv_obj_clear_flag(s_panel_spectrum, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_panel_manual, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_clear_flag(s_panel_manual, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_panel_spectrum, LV_OBJ_FLAG_HIDDEN);
+    const app_led_effect_t effect = app_led2812_effect();
+    lv_obj_t *buttons[] = { s_btn_manual, s_btn_spectrum, s_btn_test };
+    const app_led_effect_t effects[] = {
+        APP_LED_EFFECT_MANUAL, APP_LED_EFFECT_SPECTRUM, APP_LED_EFFECT_TEST
+    };
+    for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        const bool selected = (effect == effects[i]);
+        lv_obj_t *button = buttons[i];
+        lv_obj_set_style_bg_color(button, selected ? UI_COLOR_ACCENT : UI_COLOR_CARD, 0);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(button, 0),
+                                    selected ? lv_color_white() : UI_COLOR_TEXT, 0);
     }
+
+    lv_obj_add_flag(s_panel_manual, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_panel_spectrum, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_panel_test, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *panel = effect == APP_LED_EFFECT_SPECTRUM ? s_panel_spectrum :
+                      effect == APP_LED_EFFECT_TEST ? s_panel_test : s_panel_manual;
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void effect_cb(lv_event_t *e)
@@ -194,6 +195,10 @@ static void ui_timer_cb(lv_timer_t *t)
     for (int i = 0; i < BAR_NUM; i++) {
         lv_bar_set_value(s_bars[i], levels[i], LV_ANIM_OFF);
     }
+    if (s_test_position_label != NULL) {
+        lv_label_set_text_fmt(s_test_position_label, "LED %u / %u",
+                              app_led2812_test_position(), APP_LED_COUNT);
+    }
     player_refresh();
 }
 
@@ -241,7 +246,7 @@ lv_obj_t *page_mod_led_create(lv_obj_t *parent)
     lv_obj_t *shell = ui_page_shell_create_ex(parent, "Ambient Light", back_cb);
     lv_obj_t *content = ui_page_shell_content(shell);
 
-    /* 顶上一条：两个效果按钮 + 右边一个 Disable */
+    /* 顶上一条：三个效果按钮 */
     lv_obj_t *bar = lv_obj_create(content);
     lv_obj_set_size(bar, LV_PCT(100), BTN_H);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
@@ -252,11 +257,13 @@ lv_obj_t *page_mod_led_create(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(bar, 6, 0);
 
-    /* 两个效果按钮等宽铺满：选中=强调色，没选中=白卡片（见 effect_buttons_refresh） */
-    s_btn_manual   = make_button(bar, "Manual", 148, effect_cb,
+    /* 三个效果按钮等宽铺满：选中=强调色，没选中=白卡片 */
+    s_btn_manual   = make_button(bar, "Manual", EFFECT_BTN_W, effect_cb,
                                  (void *)(intptr_t)APP_LED_EFFECT_MANUAL);
-    s_btn_spectrum = make_button(bar, "Spectrum", 148, effect_cb,
+    s_btn_spectrum = make_button(bar, "Spectrum", EFFECT_BTN_W, effect_cb,
                                  (void *)(intptr_t)APP_LED_EFFECT_SPECTRUM);
+    s_btn_test     = make_button(bar, "Test", EFFECT_BTN_W, effect_cb,
+                                 (void *)(intptr_t)APP_LED_EFFECT_TEST);
 
     /* ---- 手动面板：一张白卡片里放色轮 + 竖排亮度 ---- */
     s_panel_manual = panel_card(content);
@@ -315,6 +322,18 @@ lv_obj_t *page_mod_led_create(lv_obj_t *parent)
         lv_obj_set_style_bg_color(s_bars[i], UI_COLOR_ACCENT, LV_PART_INDICATOR);
     }
 
+    /* ---- 灯珠排列测试：一次只亮一颗，编号按灯带串行顺序循环 ---- */
+    s_panel_test = panel_card(content);
+    lv_obj_t *test_hint = lv_label_create(s_panel_test);
+    lv_obj_set_style_text_color(test_hint, UI_COLOR_TEXT_SUB, 0);
+    lv_label_set_text(test_hint, "One LED at a time");
+    lv_obj_align(test_hint, LV_ALIGN_CENTER, 0, -16);
+
+    s_test_position_label = lv_label_create(s_panel_test);
+    lv_obj_set_style_text_font(s_test_position_label, UI_FONT_BODY, 0);
+    lv_obj_set_style_text_color(s_test_position_label, UI_COLOR_ACCENT, 0);
+    lv_obj_align(s_test_position_label, LV_ALIGN_CENTER, 0, 16);
+
     /* 播放控制：频谱灯要有声音才动，而换歌是音乐页的事，这里只给
      * "让它响"和"换一首"两个动作，省得用户为了开声音跑来跑去 */
     lv_obj_t *play_row = lv_obj_create(s_panel_spectrum);
@@ -353,6 +372,10 @@ lv_obj_t *page_mod_led_create(lv_obj_t *parent)
 
     effect_buttons_refresh();
     player_refresh();
+    if (s_test_position_label != NULL) {
+        lv_label_set_text_fmt(s_test_position_label, "LED %u / %u",
+                              app_led2812_test_position(), APP_LED_COUNT);
+    }
 
     /* 100ms 一拍。**只读快照**，不触发任何硬件动作 */
     s_timer = lv_timer_create(ui_timer_cb, 100, NULL);
@@ -376,10 +399,11 @@ void page_mod_led_destroy(void)
     }
     /* **不停模块**：灯跟的是"模式"不是"页面"。要关得走页面上那个 Disable，
      * 那才是 app_module_deselect() */
-    s_btn_manual = s_btn_spectrum = NULL;
-    s_panel_manual = s_panel_spectrum = NULL;
+    s_btn_manual = s_btn_spectrum = s_btn_test = NULL;
+    s_panel_manual = s_panel_spectrum = s_panel_test = NULL;
     s_wheel = s_bright = s_bright_label = NULL;
     s_track_label = s_play_label = NULL;
+    s_test_position_label = NULL;
     for (int i = 0; i < BAR_NUM; i++) {
         s_bars[i] = NULL;
     }
