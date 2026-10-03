@@ -697,7 +697,8 @@ esp_err_t bsp_camera_init(void)
 
     sensor_t *s = esp_camera_sensor_get();
     if (s != NULL && s->id.PID == GC0308_PID) {
-        s->set_hmirror(s, 1);
+        /* 关闭水平镜像；预览和拍摄照片都使用传感器输出方向。 */
+        s->set_hmirror(s, 0);
     }
     /*
      * 传感器**全程**跑 VGA(640x480)，不再切回 QVGA。
