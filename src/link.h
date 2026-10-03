@@ -10,7 +10,7 @@
  *   Ecam → C2   #wifi 2 <b64 PASS>
  *   Ecam → C2   #wifi 3              到这一行才真的存 NVS 并连
  *   C2 → Ecam   #wifi ok | #wifi err <code>
- *   C2 → Ecam   #ip <addr>           拿到 IP / 掉线（空地址）
+ *   C2 → Ecam   #ip <addr>           拿到 IP / 掉线（空地址）；收到 #hi 时也报告当前状态
  *
  * **运动指令 500ms 不来就自动停车**（和参考项目的看门狗同长）。
  */

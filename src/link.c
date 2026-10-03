@@ -147,6 +147,9 @@ void link_handle_line(char *line, bool allow_provisioning)
     /* ---- 身份 ---- */
     if (strcmp(line, "#hi") == 0) {
         reply("#ok v1 tank\n");
+        /* Ecam 可能在 WiFi 已经连好后才启用履带车模块；
+         * #hi 握手时重报当前 IP，避免错过启动时唯一一次 IP 事件。 */
+        link_send_ip(wifi_prov_connected() ? wifi_prov_ip() : "");
         return;
     }
 

@@ -4,12 +4,8 @@
 
 CONFIG_IDF_TARGET="esp32c2"
 
-# The reference project for_example/tank/c2_tracked_chassis also has this line.
-# Comment there says "Bypass a bug. Use 26M XTAL Freq" -- that chassis's C2
-# module uses a 26MHz crystal instead of the default 40MHz.
-# Keep this if your board matches; if you see crystal errors on serial or
-# WiFi won't start, check this first.
-
+# Match the reference project's ESP32-C2 board configuration. Its 26MHz XTAL
+# setting is required to work around a board-specific clock configuration bug.
 CONFIG_XTAL_FREQ_26=y
 
 # Default single-app partition on 4MB flash only gives 1MB; WiFi + httpd
@@ -18,8 +14,10 @@ CONFIG_XTAL_FREQ_26=y
 
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
-# Log over UART0, same port as flash/monitor
+# ESP-IDF uses 74880 baud for ESP32-C2 with a 26MHz XTAL.
+# Keep UART0 console, esptool monitor, and PlatformIO monitor in sync.
 CONFIG_ESP_CONSOLE_UART_NUM=0
-CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=74880
+CONFIG_ESPTOOLPY_MONITOR_BAUD=74880
 
 CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y

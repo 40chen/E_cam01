@@ -57,11 +57,12 @@ PlatformIO + ESP-IDF（`framework = espidf`，不是 Arduino）：
 ```bash
 pio run                  # 构建
 pio run -t upload        # 烧录
-pio device monitor       # 串口，115200
+pio device monitor       # 串口日志，74880
 ```
 
 `platformio.ini` 里 `upload_speed = 115200`（原先写 460800，掉回默认值更稳），
-`monitor_speed = 115200`。
+`monitor_speed = 74880`。ESP32-C2 按参考配置使用 26MHz XTAL 时，ESP-IDF 默认控制台
+波特率是 74880；UART1 和 Ecam 通信仍是 115200。
 
 ⚠️ **构建目录在 OneDrive 里，会出怪事。** 中断过一次构建之后，下一次大概率报
 `FileExistsError [WinError 183]`，栈在 `os.makedirs('.pio/build/<board>')`——
@@ -101,9 +102,8 @@ PlatformIO 生成的那份只有 `idf_component_register(SRCS ${app_sources})`�
 
 `sdkconfig.defaults` 里两条值得注意的：
 
-- **`CONFIG_XTAL_FREQ_26=y`** —— 参考项目 `c2_tracked_chassis` 那块 C2 模块用的是
-  **26MHz 晶振**而不是默认的 40MHz，注释里写着 "Bypass a bug"。**换板子要重新确认**：
-  串口报晶振错误、或者 WiFi 起不来，第一个查这里。
+- **`CONFIG_XTAL_FREQ_26=y`** —— 与参考项目 `c2_tracked_chassis` 的 C2 板配置一致，
+  按参考项目的说明用于绕过该板子的时钟配置问题。更换硬件时要重新核对。
 - **`CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y`** —— 默认的 single-app 分区在 4MB
   flash 上只给 1MB，WiFi + httpd 可能顶到上限；这个给 1.5MB。不打算做 OTA，
   所以不需要双分区。
@@ -143,7 +143,7 @@ board_build.flash_size  = 2MB   ; 让 IDF 那边的默认值也跟着对齐
 | C2 → Ecam | `#ok v1 tank` | UART，不答 = 旧固件 |
 | Ecam → C2 | `#wifi 1 <b64 SSID>` / `#wifi 2 <b64 PASS>` / `#wifi 3` | **只走 UART** |
 | C2 → Ecam | `#wifi ok` / `#wifi err <code>` | UART |
-| C2 → Ecam | `#ip <addr>` | UART 报一次，之后**每秒一条当 UDP 心跳** |
+| C2 → Ecam | `#ip <addr>` | UART 在拿到 IP 时及收到 `#hi` 时报告；之后**每秒一条当 UDP 心跳** |
 
 **串口脚是 C2 自己的编号，和 Ecam 那边是两套：** 本侧 TX=GPIO10、RX=GPIO18
 （沿用参考项目）。Ecam 的 TX 接这里的 RX，Ecam 的 RX 接这里的 TX。
@@ -233,8 +233,8 @@ C2 只有 272KB RAM、4MB flash，那套搬不过来也不划算。）
 凭据存在 NVS（namespace `tank`），**Ecam 推一次就够**，之后每次上电自己连——
 车不能每次上电都等主机推一遍。
 
-- **连上之后主动把 IP 报给 Ecam**（`#ip`）：C2 没有屏幕，网页遥控的地址只有 Ecam
-  的履带车页能显示出来。不报的话用户就只能在路由器后台里找它。
+- **连上之后主动把 IP 报给 Ecam**（`#ip`），收到 `#hi` 也会重报当前状态：C2 没有屏幕，
+  网页遥控的地址只有 Ecam 的履带车页能显示出来；重报可避免 Ecam 晚启动而错过 IP。
 - **断开原因做了归类**：`auth`（密码错/握手超时）、`no ap`（找不到）、`disc <n>`。
   密码错和找不到 AP 是两回事，用户要能分清。
 - **有凭据就一直重连，不做退避**——车就停在用户脚边，断线重连越早越好。
