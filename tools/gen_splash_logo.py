@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""把 assets/logo.jpg 转成 LVGL 能直接显示的 C 数组（main/ui/splash_logo.c）。
+"""把 assets/logo2.jpg 转成 LVGL 能直接显示的 C 数组（main/ui/splash_logo.c）。
 
 为什么要转而不是让固件在启动时解码：
     启动页是开机后第一眼看到的东西，它的意义就是盖住启动那段时间。
     在显示之前先解一次 JPEG（几百毫秒）等于把这段空白又还回去了。
     预先转成裸像素放进 flash 最省事，代价是占 150KB 左右。
 
-为什么留白处要复制边缘像素而不是填纯黑：
-    logo 的"黑"背景不是均匀色，有细微噪点。拿一个固定色去接，暗环境下能
-    看出一圈方框接缝。把坐标夹回图片范围取最近的边缘像素（即向四周外扩
-    边缘），过渡是连续的，看着就是同一片黑。
+为什么留白处要复制边缘像素而不是填固定颜色：
+    留白处沿用图片边缘颜色，可避免图片与留白之间出现明显的接缝。
 
 用法：
     python tools/gen_splash_logo.py
@@ -23,7 +21,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "assets", "logo.jpg")
+SRC = os.path.join(ROOT, "assets", "logo2.jpg")
 OUT = os.path.join(ROOT, "main", "ui", "splash_logo.c")
 
 SCREEN_W, SCREEN_H = 320, 240
@@ -39,12 +37,8 @@ BYTES_PER_LINE = 16
 def load_logo():
     """先裁成居中正方形，再缩放到能放进 BOX_W x BOX_H 的最大尺寸，读回 RGB888。
 
-    为什么要裁：源图是 3840x1920 的 2:1 画布，但真正的图案是居中的一块正方形
-    （用 -trim 量出来约 1717x1717），左右那一千多像素全是黑边。整体按 2:1 缩放
-    的话图案只有 152 像素高，白白浪费屏幕；裁掉黑边后能到 200 像素左右。
-
-    裁的是"能放下的最大居中正方形"（1920x1920），不是紧贴图案的 1717——留一点
-    余量，避免把图案边缘那圈很淡的光晕切掉。
+    源图的图案位于画布中央；裁成最大居中正方形，可避免画布两侧的空白
+    限制图案在屏幕上的显示尺寸。
 
     用 -resize WxH（不带 !）让 ImageMagick 按比例适配，实际尺寸从 PPM 头里读。
     """
@@ -143,12 +137,11 @@ def write_c(data, pix, w, h, ox, oy):
     header = """/*
  * splash_logo.c — 启动页图片（**自动生成，不要手改**）
  *
- * 由 tools/gen_splash_logo.py 从 assets/logo.jpg 生成：
+ * 由 tools/gen_splash_logo.py 从 assets/logo2.jpg 生成：
  *   - 按原比例缩放到 {lw}x{lh}（能放进 {bw}x{bh} 的最大尺寸），居中放在
  *     {sw}x{sh} 画布上，即左右各留 {ox} 像素、上下各留 {oy} 像素
  *   - 留白处把坐标夹回图片范围内取最近的边缘像素（即向四周外扩边缘）。
- *     原图的黑背景带细微噪点（左上 {tl}、右上 {tr}、左下 {bl}、右下 {br}），
- *     填一个固定色会在暗环境下露出一圈方框接缝，外扩边缘则过渡连续。
+ *     四角颜色：左上 {tl}、右上 {tr}、左下 {bl}、右下 {br}。
  *   - 转成 LVGL 需要的字节序：CONFIG_LV_COLOR_16_SWAP=y 时 lv_color16_t 的
  *     位域是 green_h:3, red:5, blue:5, green_l:3，展开后两字节与标准 RGB565
  *     相反，所以存大端（高字节在前）。

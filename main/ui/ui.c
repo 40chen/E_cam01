@@ -92,7 +92,7 @@ static void splash_show_locked(void)
     lv_obj_clear_flag(s_splash, LV_OBJ_FLAG_SCROLLABLE);
 
     /*
-     * 图是 320x240 的裸像素数组（tools/gen_splash_logo.py 从 assets/logo.jpg
+     * 图是 320x240 的裸像素数组（tools/gen_splash_logo.py 从 assets/logo2.jpg
      * 生成），直接挂上去，不做任何解码——启动页的意义就是盖住启动那段时间，
      * 在这儿解一次 JPEG 等于把空白又还回去了。
      *

@@ -96,7 +96,14 @@ esp_err_t bsp_dvp_pwdn(uint8_t level);
 #define BSP_LCD_BACKLIGHT       (GPIO_NUM_42)
 
 /* 官方示例用 80MHz + SPI mode 2，这两个参数与常见 ST7789 用法（40MHz + mode 0）
- * 不同，但已在该板实测可用，不要照搬别的例程改写。 */
+ * 不同，但已在该板实测可用，不要照搬别的例程改写。
+ *
+ * 加 FPC 延长线后屏幕无画面。此前关于 40/10/5MHz 的测试记录不可靠，
+ * 需要重新实测；目前没有足够依据判断降低 SPI 时钟能否解决问题。
+ *
+ * 注意：背光亮不代表面板初始化成功。ST7789 是只写器件（没有 MISO），
+ * 即使 SPI 数据未能到达面板，写操作也可能返回 ESP_OK；需结合实机画面
+ * 与延长线通断检查定位。 */
 #define BSP_LCD_PIXEL_CLOCK_HZ  (80 * 1000 * 1000)
 #define BSP_LCD_SPI_MODE        (2)
 

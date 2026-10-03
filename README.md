@@ -256,7 +256,7 @@ SMTP 服务器是按 `From` 的域名推出来的（域名表在 `main/app/app_m
 
 ## 启动页图片
 
-启动页显示的图来自 `assets/logo.jpg`，由 `tools/gen_splash_logo.py` 转成
+启动页显示的图来自 `assets/logo2.jpg`，由 `tools/gen_splash_logo.py` 转成
 `main/ui/splash_logo.c`（320x240 的裸像素数组，直接编进固件）。
 
 **换 logo 之后要重新跑一次脚本**：
@@ -274,9 +274,8 @@ python tools/gen_splash_logo.py
   代价约 150KB。
 - **四周留 8px 空白，图片不贴边**。改 `tools/gen_splash_logo.py` 里的 `MARGIN`
   即可。logo 是正方形，按留白后的高度缩放（当前 224x224），水平居中。
-- **留白不是填纯色，是把坐标夹回图片范围取最近的边缘像素**（即向四周外扩边缘）。
-  原图的黑背景不是均匀色（四角从 `#000000` 到 `#101010`，有噪点），填一个固定色
-  会在暗环境下露出一圈方框接缝；外扩边缘则过渡连续，看着就是同一片黑。
+- **留白不是填固定色，是把坐标夹回图片范围取最近的边缘像素**（即向四周外扩边缘），
+  让图片边缘与留白自然衔接。
 - **字节序**：`CONFIG_LV_COLOR_16_SWAP=y` 时 `lv_color16_t` 的位域是
   `green_h:3, red:5, blue:5, green_l:3`，展开后两字节与标准 RGB565 相反，
   所以脚本存的是大端（高字节在前），跟相机预览那条路一致。
@@ -936,7 +935,7 @@ FT6336、相机 SCCB 都挂在同一条 I2C0 上，地址不撞；而且参考�
 0. 实施进度（随开发更新）
 已实现：
 
-开机启动页（assets/logo.jpg 转换而来，见 tools/gen_splash_logo.py）与主菜单
+开机启动页（assets/logo2.jpg 转换而来，见 tools/gen_splash_logo.py）与主菜单
 （Camera / Music / Work Mode / Photos / Settings / Modules 六宫格，见"主菜单"一节）
 
 取景页：GC0308 实时预览（20fps）、圆形快门（触摸）+ Boot 键拍照（按住只拍一张）、
@@ -1278,4 +1277,3 @@ WiFi 设置：点击进入软键盘输入，显示连接状态。
 软键盘：LVGL lv_keyboard，占据屏幕下半部分。
 
 操作按钮：右上角“保存”/“取消”。
-
