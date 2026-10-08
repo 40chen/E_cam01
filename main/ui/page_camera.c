@@ -458,11 +458,14 @@ lv_obj_t *page_camera_create(lv_obj_t *parent)
      *
      * 音乐现在是**模式**不是页面：离开音乐页不再停播（那是为了频谱灯，
      * 见 page_music.c），所以"相机和 MP3 不能同时跑"这条规矩的落点挪到了
-     * 这里——两者抢内部 DMA RAM，是真会出问题的，不是风格问题。
+     * 这里——两者抢内部 DMA RAM，是真会出问题的，不是风格问题。通过
+     * app_audio_stop_and_wait() 等到音频任务清理完再启动相机，不能只发异步命令。
      */
-    if (app_audio_state() != APP_AUDIO_IDLE) {
-        ESP_LOGW(TAG, "音乐还在放，先停掉（相机与 MP3 不能同时工作）");
-        app_audio_stop();
+    esp_err_t audio_err = app_audio_stop_and_wait(5000);
+    if (audio_err != ESP_OK) {
+        ESP_LOGE(TAG, "等待音乐停止失败: %s", esp_err_to_name(audio_err));
+        show_toast("Audio cleanup failed", UI_COLOR_DANGER);
+        return root;
     }
 
     /* 启动预览 */

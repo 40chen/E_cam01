@@ -23,6 +23,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_heap_caps.h"
@@ -84,6 +85,7 @@ typedef enum {
 typedef struct {
     audio_cmd_op_t op;
     int32_t        value;
+    uint32_t       stop_id;
 } audio_cmd_t;
 
 /*---------------------------------------------------------------------------
@@ -92,6 +94,7 @@ typedef struct {
  *-------------------------------------------------------------------------*/
 static QueueHandle_t        s_cmd_q;
 static TaskHandle_t         s_task;
+static SemaphoreHandle_t    s_stop_mutex;
 static app_audio_event_cb_t s_event_cb;
 static void                *s_event_user;
 static app_audio_pcm_cb_t   s_pcm_cb;       /* 频谱灯的抽头，见 app_audio.h */
@@ -105,6 +108,10 @@ static volatile app_audio_state_t s_state = APP_AUDIO_IDLE;
 static volatile uint32_t          s_pos_ms;
 static volatile uint32_t          s_duration_ms;
 static int                        s_volume = APP_AUDIO_DEFAULT_VOLUME;
+static uint32_t                   s_next_stop_id;
+static volatile uint32_t          s_stop_ack_id;
+static volatile esp_err_t         s_stop_result = ESP_OK;
+static uint32_t                   s_playback_stop_id;
 
 /* 把 s_volume（0~100）映射到 BSP 的 0~93 写下去，定义在文件后半 */
 static void apply_volume(void);
@@ -127,7 +134,7 @@ static esp_err_t send_cmd(audio_cmd_op_t op, int32_t value)
     if (s_cmd_q == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    const audio_cmd_t cmd = { .op = op, .value = value };
+    const audio_cmd_t cmd = { .op = op, .value = value, .stop_id = 0 };
     /* 队列满了说明解码任务卡住了，这种时候丢命令比阻塞界面线程好：
      * 界面卡住会连触摸都没反应，丢一条命令最多是"按了没生效" */
     return (xQueueSend(s_cmd_q, &cmd, 0) == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
@@ -439,6 +446,9 @@ static bool play_file(int index, int *next_out)
                 set_state(paused ? APP_AUDIO_PAUSED : APP_AUDIO_PLAYING);
                 break;
             case CMD_STOP:
+                if (cmd.stop_id != 0) {
+                    s_playback_stop_id = cmd.stop_id;
+                }
                 ok = false;
                 goto done;
             case CMD_SEEK:
@@ -662,6 +672,22 @@ done:
     return ok;
 }
 
+static esp_err_t release_audio_resources(void)
+{
+    const esp_err_t err = bsp_audio_deinit();
+    if (s_pcm != NULL) {
+        heap_caps_free(s_pcm);
+        s_pcm = NULL;
+    }
+    if (s_dec != NULL) {
+        MP3FreeDecoder(s_dec);
+        s_dec = NULL;
+    }
+    free(s_in_buf);
+    s_in_buf = NULL;
+    return err;
+}
+
 /* 播放期间一直开着功放（歌与歌之间不关），避免每首都"啪"一下 */
 static void run_playback(int index)
 {
@@ -673,9 +699,21 @@ static void run_playback(int index)
         index = 0;
     }
 
+    s_playback_stop_id = 0;
+    if (s_pcm == NULL) {
+        s_pcm = heap_caps_malloc(PCM_BUF_BYTES, MALLOC_CAP_DMA);
+        if (s_pcm == NULL) {
+            ESP_LOGE(TAG, "DMA 内存不足，PCM 缓冲 (%d 字节) 分配失败", PCM_BUF_BYTES);
+            set_state(APP_AUDIO_ERROR);
+            return;
+        }
+    }
+
     esp_err_t err = bsp_audio_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "音频初始化失败: %s", esp_err_to_name(err));
+        heap_caps_free(s_pcm);
+        s_pcm = NULL;
         s_index = index;
         set_state(APP_AUDIO_ERROR);
         return;
@@ -706,6 +744,11 @@ static void run_playback(int index)
     if (s_state != APP_AUDIO_ERROR) {
         set_state(APP_AUDIO_IDLE);
     }
+    if (s_playback_stop_id != 0) {
+        s_stop_result = release_audio_resources();
+        s_stop_ack_id = s_playback_stop_id;
+        s_playback_stop_id = 0;
+    }
 }
 
 static void audio_task(void *arg)
@@ -719,6 +762,13 @@ static void audio_task(void *arg)
         switch (cmd.op) {
         case CMD_PLAY:
             run_playback((int)cmd.value);
+            break;
+        case CMD_STOP:
+            set_state(APP_AUDIO_IDLE);
+            if (cmd.stop_id != 0) {
+                s_stop_result = release_audio_resources();
+                s_stop_ack_id = cmd.stop_id;
+            }
             break;
         case CMD_RESUME:
         case CMD_TOGGLE:
@@ -743,25 +793,20 @@ esp_err_t app_audio_init(void)
         return ESP_OK;
     }
 
-    if (s_pcm == NULL) {
-        /*
-         * PCM 输出缓冲必须是 DMA 可访问内存（内部 RAM）。9216 字节，
-         * 比起相机那几块 153KB 的帧缓冲是小意思，但内部 RAM 一直紧张，
-         * 所以这里失败要报出来而不是硬撑。
-         */
-        s_pcm = heap_caps_malloc(PCM_BUF_BYTES, MALLOC_CAP_DMA);
-        if (s_pcm == NULL) {
-            ESP_LOGE(TAG, "DMA 内存不足，PCM 缓冲 (%d 字节) 分配失败", PCM_BUF_BYTES);
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
     s_cmd_q = xQueueCreate(6, sizeof(audio_cmd_t));
     if (s_cmd_q == NULL) {
         return ESP_ERR_NO_MEM;
     }
+    s_stop_mutex = xSemaphoreCreateMutex();
+    if (s_stop_mutex == NULL) {
+        vQueueDelete(s_cmd_q);
+        s_cmd_q = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     if (xTaskCreatePinnedToCore(audio_task, "app_audio", AUDIO_TASK_STACK, NULL,
                                 AUDIO_TASK_PRIO, &s_task, AUDIO_TASK_CORE) != pdPASS) {
+        vSemaphoreDelete(s_stop_mutex);
+        s_stop_mutex = NULL;
         vQueueDelete(s_cmd_q);
         s_cmd_q = NULL;
         s_task = NULL;
@@ -843,6 +888,49 @@ esp_err_t app_audio_resume(void)
 esp_err_t app_audio_stop(void)
 {
     return send_cmd(CMD_STOP, 0);
+}
+
+esp_err_t app_audio_stop_and_wait(uint32_t timeout_ms)
+{
+    if (s_cmd_q == NULL) {
+        return release_audio_resources();
+    }
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    const TickType_t start = xTaskGetTickCount();
+    if (xSemaphoreTake(s_stop_mutex, timeout_ticks) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if ((xTaskGetTickCount() - start) >= timeout_ticks) {
+        xSemaphoreGive(s_stop_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    uint32_t stop_id = ++s_next_stop_id;
+    if (stop_id == 0) {
+        stop_id = ++s_next_stop_id;
+    }
+    const audio_cmd_t cmd = { .op = CMD_STOP, .value = 0, .stop_id = stop_id };
+    if (xQueueSend(s_cmd_q, &cmd, 0) != pdTRUE) {
+        xSemaphoreGive(s_stop_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    while (s_stop_ack_id != stop_id) {
+        const TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= timeout_ticks) {
+            xSemaphoreGive(s_stop_mutex);
+            return ESP_ERR_TIMEOUT;
+        }
+        TickType_t remaining = timeout_ticks - elapsed;
+        const TickType_t poll_ticks = pdMS_TO_TICKS(10);
+        if (poll_ticks != 0 && remaining > poll_ticks) {
+            remaining = poll_ticks;
+        }
+        vTaskDelay(remaining);
+    }
+
+    xSemaphoreGive(s_stop_mutex);
+    return s_stop_result;
 }
 
 esp_err_t app_audio_seek_ms(uint32_t ms)

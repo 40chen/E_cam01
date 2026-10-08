@@ -11,7 +11,7 @@
  * 与相机的互斥（工程约定）：两者不能同时跑，它们抢内部 DMA RAM。
  * **落点在这一版挪了**：以前是"离开音乐页就停播"，现在音乐算"模式"——
  * 离开音乐页不停（频谱灯还要拿它当输入，见 page_music.c 的 maybe_stop_audio），
- * 改由**相机页**在进页时调 app_audio_stop()。U 盘模式本来就会停。
+ * 改由**相机页**在进页时同步停播并释放音频硬件资源。U 盘模式本来就会停。
  *
  * 采样率：卡里的 MP3 采样率各不相同（44.1k / 48k / 22.05k / 16k…），
  * 播放时按文件自己的采样率切 I2S 时钟，见 bsp_audio_set_fs()。
@@ -87,6 +87,9 @@ esp_err_t app_audio_resume(void);
 
 /* 停止播放、关功放、释放解码器。停完可以立刻再 play */
 esp_err_t app_audio_stop(void);
+
+/* 停止并等待音频任务完成清理、释放硬件资源；超时返回 ESP_ERR_TIMEOUT。 */
+esp_err_t app_audio_stop_and_wait(uint32_t timeout_ms);
 
 /* 跳到指定的播放位置（毫秒）。CBR 准确，VBR 是按字节比例估的近似值 */
 esp_err_t app_audio_seek_ms(uint32_t ms);

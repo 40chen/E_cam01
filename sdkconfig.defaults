@@ -75,6 +75,10 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_TINYUSB_MSC_ENABLED=y
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
 
+# Keep camera DMA staging buffers small enough for the fragmented internal heap.
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
+# CONFIG_CAMERA_PSRAM_DMA is not set
+
 # NOTE: a vendor class (CONFIG_TINYUSB_VENDOR_COUNT) was briefly enabled here for
 # the "USB Display" mode (device as a PC monitor). That mode was removed on
 # 2026-09-26 because it needs a Windows IDD driver that would not start on the

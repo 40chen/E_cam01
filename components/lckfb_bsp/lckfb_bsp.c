@@ -27,6 +27,11 @@
 
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "audio_codec_ctrl_if.h"
+#include "audio_codec_data_if.h"
+#include "audio_codec_gpio_if.h"
+#include "audio_codec_if.h"
+#include "es8311_codec.h"
 
 #include "esp_camera.h"
 #include "esp_vfs_fat.h"
@@ -688,6 +693,12 @@ esp_err_t bsp_camera_init(void)
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
     };
 
+    /*
+     * Keep PSRAM DMA disabled: this project's 64-byte cache lines are not
+     * compatible with the managed camera driver's PSRAM cache-sync alignment.
+     * The 16 KB DMA-buffer limit in sdkconfig.defaults keeps the driver's
+     * internal staging buffer to 15 KB for VGA RGB565, below available heap.
+     */
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_camera_init failed: %s", esp_err_to_name(err));
@@ -735,19 +746,96 @@ esp_err_t bsp_camera_deinit(void)
 static esp_codec_dev_handle_t s_play_dev = NULL;
 static i2s_chan_handle_t s_i2s_tx = NULL;
 static const audio_codec_data_if_t *s_i2s_data_if = NULL;
+static const audio_codec_gpio_if_t *s_audio_gpio_if = NULL;
+static const audio_codec_ctrl_if_t *s_audio_ctrl_if = NULL;
+static const audio_codec_if_t *s_audio_codec_if = NULL;
 static uint32_t s_cur_rate = 0;
 static int s_volume = BSP_AUDIO_DEFAULT_VOLUME;
+static bool s_i2s_tx_enabled;
+
+esp_err_t bsp_audio_deinit(void)
+{
+    esp_err_t result = ESP_OK;
+
+    if (s_play_dev != NULL) {
+        const int close_err = esp_codec_dev_close(s_play_dev);
+        if (close_err != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "codec close failed: %d", close_err);
+            result = ESP_FAIL;
+        } else if (s_cur_rate != 0) {
+            s_i2s_tx_enabled = false;
+        }
+        esp_codec_dev_delete(s_play_dev);
+        s_play_dev = NULL;
+    }
+
+    if (s_i2s_tx != NULL && s_i2s_tx_enabled) {
+        const esp_err_t err = i2s_channel_disable(s_i2s_tx);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "i2s tx disable failed: %s", esp_err_to_name(err));
+            result = err;
+        } else {
+            s_i2s_tx_enabled = false;
+        }
+    }
+
+    if (s_audio_codec_if != NULL) {
+        if (audio_codec_delete_codec_if(s_audio_codec_if) != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "codec interface cleanup failed");
+            result = ESP_FAIL;
+        }
+        s_audio_codec_if = NULL;
+    }
+    if (s_audio_ctrl_if != NULL) {
+        if (audio_codec_delete_ctrl_if(s_audio_ctrl_if) != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "codec control interface cleanup failed");
+            result = ESP_FAIL;
+        }
+        s_audio_ctrl_if = NULL;
+    }
+    if (s_i2s_data_if != NULL) {
+        if (audio_codec_delete_data_if(s_i2s_data_if) != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "codec data interface cleanup failed");
+            result = ESP_FAIL;
+        }
+        s_i2s_data_if = NULL;
+    }
+    if (s_audio_gpio_if != NULL) {
+        if (audio_codec_delete_gpio_if(s_audio_gpio_if) != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "codec GPIO interface cleanup failed");
+            result = ESP_FAIL;
+        }
+        s_audio_gpio_if = NULL;
+    }
+    if (s_i2s_tx != NULL) {
+        const esp_err_t err = i2s_del_channel(s_i2s_tx);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "i2s tx delete failed: %s", esp_err_to_name(err));
+            result = err;
+        } else {
+            s_i2s_tx = NULL;
+            s_i2s_tx_enabled = false;
+        }
+    }
+
+    s_cur_rate = 0;
+    bsp_pa_en(0);
+    return result;
+}
 
 esp_err_t bsp_audio_init(void)
 {
-    if (s_play_dev != NULL) {
+    if (s_play_dev != NULL && s_i2s_tx != NULL) {
         return ESP_OK;                     /* 已初始化 */
     }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(BSP_AUDIO_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_i2s_tx, NULL),
-                        TAG, "i2s new channel failed");
+    esp_err_t err = i2s_new_channel(&chan_cfg, &s_i2s_tx, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s new channel failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(BSP_AUDIO_DEFAULT_RATE),
@@ -760,8 +848,11 @@ esp_err_t bsp_audio_init(void)
             .din  = BSP_AUDIO_DIN,
         },
     };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_tx, &std_cfg),
-                        TAG, "i2s init std mode failed");
+    err = i2s_channel_init_std_mode(s_i2s_tx, &std_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s init std mode failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
 
     /*
      * 立刻启用发送通道——和官方示例（11-mp3_player/esp32_s3_szp.c 的
@@ -783,8 +874,12 @@ esp_err_t bsp_audio_init(void)
      *   E i2s_common: i2s_channel_disable: the channel has not been enabled yet
      * 那行 ERROR 本身就是"跟驱动对着干"的迹象，现在它应该消失了。
      */
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_tx),
-                        TAG, "i2s tx channel enable failed");
+    err = i2s_channel_enable(s_i2s_tx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s tx channel enable failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
+    s_i2s_tx_enabled = true;
 
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = BSP_AUDIO_I2S_NUM,
@@ -792,23 +887,36 @@ esp_err_t bsp_audio_init(void)
         .tx_handle = s_i2s_tx,
     };
     s_i2s_data_if = audio_codec_new_i2s_data(&i2s_cfg);
-    ESP_RETURN_ON_FALSE(s_i2s_data_if != NULL, ESP_FAIL, TAG, "codec i2s data if failed");
+    if (s_i2s_data_if == NULL) {
+        err = ESP_FAIL;
+        ESP_LOGE(TAG, "codec i2s data if failed");
+        goto fail;
+    }
 
-    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    s_audio_gpio_if = audio_codec_new_gpio();
+    if (s_audio_gpio_if == NULL) {
+        err = ESP_FAIL;
+        ESP_LOGE(TAG, "codec GPIO interface creation failed");
+        goto fail;
+    }
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port = BSP_I2C_NUM,
         .addr = ES8311_CODEC_DEFAULT_ADDR,
     };
-    const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    ESP_RETURN_ON_FALSE(i2c_ctrl_if != NULL, ESP_FAIL, TAG, "codec i2c ctrl if failed");
+    s_audio_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    if (s_audio_ctrl_if == NULL) {
+        err = ESP_FAIL;
+        ESP_LOGE(TAG, "codec i2c ctrl if failed");
+        goto fail;
+    }
 
     esp_codec_dev_hw_gain_t gain = {
         .pa_voltage = 5.0,
         .codec_dac_voltage = 3.3,
     };
     es8311_codec_cfg_t es8311_cfg = {
-        .ctrl_if = i2c_ctrl_if,
-        .gpio_if = gpio_if,
+        .ctrl_if = s_audio_ctrl_if,
+        .gpio_if = s_audio_gpio_if,
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
         /* 功放使能走 PCA9557 而不是 GPIO，所以这里留空，由播放侧调 bsp_pa_en() */
         .pa_pin = GPIO_NUM_NC,
@@ -820,25 +928,40 @@ esp_err_t bsp_audio_init(void)
         .invert_sclk = false,
         .hw_gain = gain,
     };
-    const audio_codec_if_t *es8311_dev = es8311_codec_new(&es8311_cfg);
-    ESP_RETURN_ON_FALSE(es8311_dev != NULL, ESP_FAIL, TAG, "es8311 codec new failed");
+    s_audio_codec_if = es8311_codec_new(&es8311_cfg);
+    if (s_audio_codec_if == NULL) {
+        err = ESP_FAIL;
+        ESP_LOGE(TAG, "es8311 codec new failed");
+        goto fail;
+    }
 
     esp_codec_dev_cfg_t dev_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-        .codec_if = es8311_dev,
+        .codec_if = s_audio_codec_if,
         .data_if = s_i2s_data_if,
     };
     s_play_dev = esp_codec_dev_new(&dev_cfg);
-    ESP_RETURN_ON_FALSE(s_play_dev != NULL, ESP_FAIL, TAG, "es8311 codec dev new failed");
+    if (s_play_dev == NULL) {
+        err = ESP_FAIL;
+        ESP_LOGE(TAG, "es8311 codec dev new failed");
+        goto fail;
+    }
 
     /* 按唯一的那个采样率打开。之后 bsp_audio_set_fs() 再调同样的参数就是空操作，
      * 不会走 close/open —— 那条路径会把 ES8311 的时钟分频器写坏（见 set_fs） */
-    ESP_RETURN_ON_ERROR(bsp_audio_set_fs(BSP_AUDIO_DEFAULT_RATE, 16, 2),
-                        TAG, "codec open failed");
+    err = bsp_audio_set_fs(BSP_AUDIO_DEFAULT_RATE, 16, 2);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "codec open failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
     bsp_audio_volume_set(s_volume);
 
     ESP_LOGI(TAG, "audio ready (ES8311)");
     return ESP_OK;
+
+fail:
+    bsp_audio_deinit();
+    return err;
 }
 
 /*
@@ -991,6 +1114,9 @@ esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
      * 回读校验——见 es8311_align_clk_regs 的注释。
      */
     esp_codec_dev_close(s_play_dev);
+    if (switching) {
+        s_i2s_tx_enabled = false;
+    }
 
     /*
      * I2S 通道的停和启交给 esp_codec_dev 自己管：close() 会走 data_if 的
@@ -1011,7 +1137,8 @@ esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
     esp_err_t err = esp_codec_dev_open(s_play_dev, &fs);
     if (err != ESP_OK) {
         /* 失败也要恢复运行，否则一次失败就把音频彻底钉死了 */
-        i2s_channel_enable(s_i2s_tx);
+        const esp_err_t enable_err = i2s_channel_enable(s_i2s_tx);
+        s_i2s_tx_enabled = (enable_err == ESP_OK);
         if (switching) {
             bsp_audio_mute(false);
         }
@@ -1022,6 +1149,7 @@ esp_err_t bsp_audio_set_fs(uint32_t rate, uint32_t bits, int channels)
                  rate, bits, channels, esp_err_to_name(err));
         return err;
     }
+    s_i2s_tx_enabled = true;
 
     /* open 里那几个时钟寄存器写得太早（芯片还在复位态），回读校验一遍。
      * 见 es8311_align_clk_regs 的长注释：正常情况下这里什么都不会做 */

@@ -264,6 +264,7 @@ esp_err_t bsp_camera_deinit(void);
 #define BSP_AUDIO_DEFAULT_RATE   (16000)
 
 esp_err_t  bsp_audio_init(void);
+esp_err_t  bsp_audio_deinit(void);
 /*
  * 重配 I2S 与 ES8311 的采样率/位宽/声道数。rate 为 0 时忽略。
  * 只支持 16bit / 立体声（helix 解码输出恒为 16bit，单声道由播放侧转立体声），
