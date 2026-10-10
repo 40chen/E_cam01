@@ -1,0 +1,9 @@
+.pio
+.vscode/.browse.c_cpp.db*
+
+# ESP-IDF / CMake 的构建目录：全是生成物（CMakeCache、build.ninja、
+# 中间 .obj），随时能完整重建，不入库
+build/
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch

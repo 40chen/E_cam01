@@ -1,0 +1,23 @@
+# ESP32C2_tank build defaults.
+# After changing this, delete sdkconfig.esp32-c2-devkitm-1 and rebuild
+# (or run: pio run -t fullclean), otherwise changes won't take effect.
+
+CONFIG_IDF_TARGET="esp32c2"
+
+# Match the reference project's ESP32-C2 board configuration. Its 26MHz XTAL
+# setting is required to work around a board-specific clock configuration bug.
+CONFIG_XTAL_FREQ_26=y
+
+# Default single-app partition on 4MB flash only gives 1MB; WiFi + httpd
+# might hit the limit. This gives 1.5MB app partition. No OTA needed,
+# so no dual partition required.
+
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ESP-IDF uses 74880 baud for ESP32-C2 with a 26MHz XTAL.
+# Keep UART0 console, esptool monitor, and PlatformIO monitor in sync.
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=74880
+CONFIG_ESPTOOLPY_MONITOR_BAUD=74880
+
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
