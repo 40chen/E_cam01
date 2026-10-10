@@ -1,0 +1,23 @@
+# ---- 敏感文件：绝不入库 ----
+# ecam_config.json 的兜底逻辑会把 API Key 以 Base64 写回，禁止提交
+ecam_config.json
+*.key
+.env
+
+# ---- 构建产物 ----
+build/
+dist/
+*.spec.bak
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
