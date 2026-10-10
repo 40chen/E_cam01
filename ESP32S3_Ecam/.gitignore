@@ -1,0 +1,31 @@
+# ESP-IDF 构建产物
+build/
+
+# 组件管理器按 idf_component.yml + dependencies.lock 自动拉下来的第三方组件，
+# 体积大且可以完整重建，不入库
+managed_components/
+
+# 上一次大改之前的配置备份，已经没用了
+sdkconfig.pre-rewrite.bak
+
+# 编辑器
+.vscode/
+
+# 上位机（assets/Ecam_display/）的 PyInstaller 产物：exe 约 11MB，build.bat
+# 随时能完整重建。**源码和 build.bat 是要入库的**，只忽略产出物。
+# 用 ** 而不是写死目录名：那个目录被整个复制过（"Ecam_display copy"），
+# 副本里的 exe 一样是产出物。
+assets/**/build/
+assets/**/dist/
+assets/**/*.spec
+
+# Python 字节码缓存。跟 Python 版本绑死（cpython-313 这种后缀），
+# 换台机器或换个 Python 就是一堆无效文件，而且源脚本一改名就成了孤儿——
+# 仓库里曾经就躺着一个已经不存在的脚本留下的 .pyc
+__pycache__/
+*.pyc
+
+# 注意：sdkconfig **是入库的**。这不符合 ESP-IDF 例程的惯例（它们通常忽略它），
+# 但本工程在 sdkconfig 里有一批手工调过的选项（LV_COLOR_16_SWAP、
+# LWIP_SNTP_MAX_SERVERS、PSRAM 相关等），全部搬到 sdkconfig.defaults 里更容易出错。
+# 入库保证换台机器 clone 下来就能构建出一样的东西。

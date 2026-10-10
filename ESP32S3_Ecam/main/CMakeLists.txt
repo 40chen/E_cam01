@@ -1,0 +1,55 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "app/app_storage.c"
+        "app/app_camera.c"
+        "app/app_settings.c"
+        "app/app_wifi.c"
+        "app/app_mail.c"
+        "app/app_audio.c"
+        "app/app_usbmsc.c"
+        "app/app_sound.c"
+        "app/shutter_sound.c"
+        "app/app_pcmon.c"
+        "app/app_module.c"
+        "app/app_led2812.c"
+        "app/app_tank.c"
+        "app/app_imu.c"
+        "ui/ui.c"
+        "ui/splash_logo.c"
+        "ui/font_cjk_20.c"
+        "ui/ui_theme.c"
+        "ui/ui_input.c"
+        "ui/ui_scan.c"
+        "ui/ui_usbmsc.c"
+        "ui/page_home.c"
+        "ui/page_camera.c"
+        "ui/page_photos.c"
+        "ui/page_music.c"
+        "ui/page_settings.c"
+        "ui/page_workmode.c"
+        "ui/page_modules.c"
+        "ui/page_mod_led.c"
+        "ui/page_mod_tank.c"
+        "ui/page_pcmon.c"
+    INCLUDE_DIRS
+        "."
+        "app"
+        "ui"
+    REQUIRES
+        lckfb_bsp
+        driver
+        esp_timer
+        ## 副屏要解上位机推过来的 JSON。cJSON 是 IDF 自带的（components/json），
+        ## 不是托管组件，不用改 idf_component.yml
+        json
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp-tls
+        mbedtls
+        espressif__esp_jpeg
+        ## 履带车页上的二维码（见 idf_component.yml）
+        espressif__qrcode
+)

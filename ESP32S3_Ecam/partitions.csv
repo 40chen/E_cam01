@@ -1,0 +1,10 @@
+# Name,   Type, SubType, Offset,   Size,   Flags
+# NOTE: keep this file ASCII-only (gen_esp32part.py reads it with the default
+# platform codec).
+#
+# The app partition is 4M: LVGL + camera + MP3 decode + mbedTLS mail + TinyUSB
+# link to roughly 2MB, so this leaves about 2x headroom. Photos and music live on
+# the TF card, so no internal storage partition is needed.
+nvs,       data, nvs,     0x9000,   24k,
+phy_init,  data, phy,     0xf000,   4k,
+factory,   app,  factory, 0x10000,  4M,
