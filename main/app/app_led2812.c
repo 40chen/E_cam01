@@ -62,10 +62,10 @@ static const char *TAG = "led2812";
 #define LED_FFT_N           512
 #define LED_BANDS           APP_LED_COLS
 
-/* 频谱的压缩参数，起点照抄参考项目（esp32s3supermini-audio-spectrum-light），
- * **上板要按实际电平重调**：它喂的是麦克风，我们喂的是解码后的满幅 PCM，
- * 同一组常数在两条链路上的量纲不一样。 */
-#define LED_SENSITIVITY     12.0f
+/* FFT 尚未按窗长归一化，幅值增益不能直接照搬麦克风参考项目的参数。
+ * 降低增益并设置噪声门，避免普通歌曲的宽带底噪让所有频段长期点亮。 */
+#define LED_SENSITIVITY     1.0f
+#define LED_NOISE_FLOOR     0.35f
 #define LED_LOG_FULL_SCALE  16.0f
 #define LED_F_LO            100.0f  /* 最低频段的下沿 */
 #define LED_F_HI            6400.0f /* 最高频段的上沿（会再按采样率夹一次） */
@@ -426,7 +426,12 @@ static void spectrum_analyze(const int16_t *mono, uint8_t *out)
             sum += s_re[b];
         }
         /* 段内取平均而不是求和：高频段比低频段宽得多，求和的话永远是高频赢 */
-        const float mag = sum / (float)(hi - lo + 1) * LED_SENSITIVITY;
+        float mag = sum / (float)(hi - lo + 1) * LED_SENSITIVITY;
+        if (mag <= LED_NOISE_FLOOR) {
+            out[c] = 0;
+            continue;
+        }
+        mag -= LED_NOISE_FLOOR;
         float norm = log10f(1.0f + mag) / log_den;
         if (norm < 0.0f) norm = 0.0f;
         if (norm > 1.0f) norm = 1.0f;
